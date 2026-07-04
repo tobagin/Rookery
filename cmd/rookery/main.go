@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,10 +12,12 @@ import (
 	"os"
 	"os/user"
 	"strings"
+	"time"
 
 	"github.com/tobagin/rookery/internal/gitstore"
 	"github.com/tobagin/rookery/internal/podman"
 	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/tobagin/rookery/internal/rhost"
 	"github.com/tobagin/rookery/internal/server"
 	"github.com/tobagin/rookery/internal/systemd"
 )
@@ -28,6 +31,8 @@ func main() {
 	passwordFile := flag.String("password-file", envOr("ROOKERY_PASSWORD_FILE", ""), "file containing the admin password (or set ROOKERY_PASSWORD)")
 	gitFlag := flag.Bool("git", envOr("ROOKERY_GIT", "") == "1" || envOr("ROOKERY_GIT", "") == "true",
 		"track unit directories in git: commit on save, history, rollback (auto-enabled for dirs that are already repositories)")
+	remotes := flag.String("remotes", envOr("ROOKERY_REMOTES", ""),
+		`comma-separated remote hosts to manage over ssh, as alias=user@host (e.g. "nas=root@nas.local,media=deploy@media.lan")`)
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -49,6 +54,11 @@ func main() {
 		log.Fatal(err)
 	}
 	attachGit(areas, *gitFlag)
+	remoteAreasList, err := remoteAreas(*remotes)
+	if err != nil {
+		log.Fatal(err)
+	}
+	areas = append(areas, remoteAreasList...)
 
 	srv := server.New(server.Options{
 		Areas:    areas,
@@ -110,12 +120,51 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// remoteAreas probes each alias=user@host entry over ssh and builds an
+// area for it: the system Quadlet tree when the ssh account is root, the
+// account's own rootless tree otherwise. An unreachable host is skipped
+// with a warning so one dead box doesn't take the whole UI down at boot.
+func remoteAreas(spec string) ([]server.Area, error) {
+	var areas []server.Area
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		alias, target, ok := strings.Cut(entry, "=")
+		if !ok || alias == "" || target == "" {
+			return nil, fmt.Errorf("-remotes: entry %q must be alias=user@host", entry)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		uid, home, remoteUser, err := rhost.Probe(ctx, target)
+		cancel()
+		if err != nil {
+			log.Printf("WARNING: remote %s (%s) unreachable, skipping: %v", alias, target, err)
+			continue
+		}
+		area := server.Area{Label: alias}
+		if uid == 0 {
+			area.Scope = systemd.Scope{SSH: target}
+			area.Dirs = quadlet.SystemDirs()
+		} else {
+			area.Scope = systemd.Scope{User: remoteUser, SSH: target}
+			area.Dirs = quadlet.UserDirs(home)
+		}
+		log.Printf("remote %s: %s (uid %d, %s scope)", alias, target, uid, area.Scope)
+		areas = append(areas, area)
+	}
+	return areas, nil
+}
+
 // attachGit opens (or with force, initializes) a git repository in each
-// area's primary directory. Directories that already are repositories get
-// history tracking even without -git; plain directories are left alone
-// unless the flag asks for them.
+// LOCAL area's primary directory. Directories that already are
+// repositories get history tracking even without -git; plain directories
+// are left alone unless the flag asks for them.
 func attachGit(areas []server.Area, force bool) {
 	for i := range areas {
+		if areas[i].Remote() {
+			continue
+		}
 		store, err := gitstore.Open(areas[i].Dirs[0], force)
 		switch {
 		case err == nil:

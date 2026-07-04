@@ -11,6 +11,10 @@ const $hoststrip = document.getElementById("hoststrip");
 let refreshTimer = null;
 let logSource = null;
 let authState = { required: false, authenticated: true };
+// Last "check image updates" result, keyed by scope/name; survives the
+// dashboard's periodic re-render.
+let updateInfo = {};
+let updateSummary = "";
 
 /* ---------- helpers ---------- */
 
@@ -254,7 +258,38 @@ async function renderDashboard() {
     ${section("Running", groups.running, "running")}
     ${section("Transitioning", groups.pending, "pending")}
     ${section("Stopped", groups.stopped, "stopped")}
-    ${section("State unknown", groups.unknown, "unknown")}`;
+    ${section("State unknown", groups.unknown, "unknown")}
+    ${units.length ? `<div class="toolbar updates-bar">
+      <button class="btn" id="btn-check-updates">Check image updates</button>
+      <span class="muted">${esc(updateSummary)}</span>
+    </div>` : ""}`;
+
+  const $chk = document.getElementById("btn-check-updates");
+  if ($chk) {
+    $chk.addEventListener("click", async () => {
+      $chk.disabled = true;
+      $chk.textContent = "checking registries…";
+      try {
+        const { body } = await api("/api/updates");
+        updateInfo = {};
+        let available = 0, checked = 0;
+        for (const row of body.updates || []) {
+          updateInfo[`${row.scope}/${row.name}`] = row;
+          if (!row.note) checked++;
+          if (row.updateAvailable) available++;
+        }
+        updateSummary = available
+          ? `${available} image update${available === 1 ? "" : "s"} available (${checked} tags checked)`
+          : `all ${checked} checked tags up to date`;
+        if ((body.skippedScopes || []).length) {
+          updateSummary += ` — remote scopes skipped: ${body.skippedScopes.join(", ")}`;
+        }
+      } catch (e) {
+        toast(e.message, true);
+      }
+      renderDashboard();
+    });
+  }
 
   $app.querySelectorAll("[data-action]").forEach(btn => {
     btn.addEventListener("click", async ev => {
@@ -284,6 +319,7 @@ function card(u) {
       ${u.scope !== "system" ? `<span class="badge badge-user" title="rootless unit of ${esc(u.scope)}">${esc(u.scope)}</span>` : ""}
       ${loop ? `<span class="badge badge-loop" title="service restarted ${u.restarts} times — likely a crash loop">↻${u.restarts}</span>` : ""}
       ${u.gpus && u.gpus.length ? `<span class="badge badge-gpu" title="${esc(u.gpus.join(", "))}">gpu</span>` : ""}
+      ${updateInfo[`${u.scope}/${u.name}`]?.updateAvailable ? `<span class="badge badge-update" title="registry serves a newer digest for ${esc(u.image)}">update</span>` : ""}
     </div>
     <div class="card-sub">${esc(u.description || u.image || "")}</div>
     <div class="card-foot">
@@ -338,6 +374,11 @@ async function renderUnit(scope, name) {
       <span class="state">${esc(stateLabel(unit))}${unit.unitFile ? " · " + esc(unit.unitFile) : ""}</span>
     </div>
     <p class="muted mono">${esc(unit.path)}${unit.readOnly ? " (read-only)" : ""}</p>
+    ${updateInfo[`${scope}/${name}`]?.updateAvailable ? `
+    <div class="banner banner-warn update-banner">
+      The registry serves a newer digest for <code>${esc(unit.image || "this image")}</code>.
+      <button class="btn btn-accent btn-sm" id="btn-pull-update">Pull new image + restart</button>
+    </div>` : ""}
     <div class="toolbar">
       ${["start", "stop", "restart", "enable", "disable"].map(a =>
         `<button class="btn" data-act="${a}">${a}</button>`).join("")}
@@ -439,6 +480,26 @@ async function renderUnit(scope, name) {
     document.getElementById("btn-confirm-save").addEventListener("click", doSave);
     document.getElementById("btn-cancel-save").addEventListener("click", () => { $validation.innerHTML = ""; });
   });
+
+  const $pullUpdate = document.getElementById("btn-pull-update");
+  if ($pullUpdate) {
+    $pullUpdate.addEventListener("click", async () => {
+      $pullUpdate.disabled = true;
+      $pullUpdate.textContent = "pulling…";
+      try {
+        const { body } = await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/update`,
+          { method: "POST", body: "{}" });
+        (body.warnings || []).forEach(warning => toast(warning, true));
+        toast(`pulled ${body.pulled} and restarted`);
+        delete updateInfo[`${scope}/${name}`];
+        render();
+      } catch (e) {
+        toast(e.message, true);
+        $pullUpdate.disabled = false;
+        $pullUpdate.textContent = "Pull new image + restart";
+      }
+    });
+  }
 
   const $gpuHelper = document.getElementById("gpu-helper");
   if ($gpuHelper) {

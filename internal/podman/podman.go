@@ -25,6 +25,9 @@ type Info struct {
 // Client talks to one Podman socket.
 type Client struct {
 	http *http.Client
+	// pulls share the transport but need a far longer deadline than
+	// metadata queries — image pulls legitimately take minutes.
+	pullHTTP *http.Client
 }
 
 // SocketPath returns the conventional native socket location for this
@@ -41,16 +44,15 @@ func SocketPath() string {
 
 // New returns a client for the socket at path.
 func New(path string) *Client {
-	return &Client{
-		http: &http.Client{
-			Timeout: 10 * time.Second,
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", path)
-				},
-			},
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", path)
 		},
+	}
+	return &Client{
+		http:     &http.Client{Timeout: 10 * time.Second, Transport: transport},
+		pullHTTP: &http.Client{Timeout: 15 * time.Minute, Transport: transport},
 	}
 }
 
@@ -148,4 +150,59 @@ func (c *Client) InspectContainer(ctx context.Context, nameOrID string) ([]byte,
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
+}
+
+// ImageDigests returns every digest the local store associates with ref
+// (RepoDigests plus the image digest) for drift comparison against the
+// registry. An error usually means the image isn't pulled yet.
+func (c *Client) ImageDigests(ctx context.Context, ref string) ([]string, error) {
+	resp, err := c.get(ctx, "/images/"+url.PathEscape(ref)+"/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var raw struct {
+		Digest      string   `json:"Digest"`
+		RepoDigests []string `json:"RepoDigests"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	digests := raw.RepoDigests
+	if raw.Digest != "" {
+		digests = append(digests, raw.Digest)
+	}
+	return digests, nil
+}
+
+// PullImage pulls ref through the Podman API and waits for completion.
+func (c *Client) PullImage(ctx context.Context, ref string) error {
+	u := "http://d/v5.0.0/libpod/images/pull?reference=" + url.QueryEscape(ref) + "&quiet=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.pullHTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("podman pull %s: %s", ref, resp.Status)
+	}
+	// The body is a stream of JSON progress objects; any "error" entry
+	// means the pull failed even though the HTTP status was 200.
+	dec := json.NewDecoder(resp.Body)
+	for dec.More() {
+		var msg struct {
+			Error string `json:"error"`
+		}
+		if err := dec.Decode(&msg); err != nil {
+			break
+		}
+		if msg.Error != "" {
+			return fmt.Errorf("podman pull %s: %s", ref, msg.Error)
+		}
+	}
+	return nil
 }

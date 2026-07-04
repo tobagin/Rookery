@@ -48,14 +48,22 @@ What works today:
   `nvidia-smi`, AMD VRAM/busy via amdgpu sysfs, Intel presence), per-unit
   attachment badges (`AddDevice=nvidia.com/gpu=…`, `/dev/dri`, `--gpus`),
   and an editor helper that inserts CDI / VAAPI / ROCm device lines.
+- **Agentless multi-host over SSH** — `-remotes nas=root@nas.local` adds
+  another box's Quadlet tree to the same dashboard: list, edit, validate
+  (with the *remote* host's generator), start/stop, and stream logs, all
+  over plain ssh. Nothing to install on the target beyond sshd and Podman;
+  ssh as root manages the system tree, ssh as a user manages that user's
+  rootless tree (enable lingering for headless user managers).
+- **Image-update checks** — one click compares every container unit's tag
+  against the digest its registry currently serves (anonymous token auth;
+  works with docker.io, ghcr.io, quay.io, ...) and flags drift; a second
+  click pulls the new image and restarts the unit. Digest-pinned images
+  are correctly reported as unable to drift.
 - **Admin login** — single-password auth (`ROOKERY_PASSWORD` or
   `-password-file`) with in-memory sessions; without a password Rookery is
   open and warns loudly unless bound to loopback.
 - **Mobile-responsive UI** — passes the "restart it from the couch" test.
 - **Single static binary**, zero Go dependencies outside the standard library.
-
-Not yet: multi-host over SSH, image-update checks. See the
-[roadmap](#roadmap).
 
 > ⚠️ Set a password (`ROOKERY_PASSWORD` or `-password-file`) before exposing
 > Rookery beyond `127.0.0.1`, and put TLS in front of it (reverse proxy) —
@@ -78,6 +86,7 @@ make build          # or: go build ./cmd/rookery
 | `-users` | `ROOKERY_USERS` | — | extra users to manage (rootful only) |
 | `-password-file` | `ROOKERY_PASSWORD_FILE` | — | admin password file (or set `ROOKERY_PASSWORD`) |
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
+| `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...` |
 
 Dogfooding: [packaging/rookery.container](packaging/rookery.container) runs
 Rookery itself as a Quadlet.
@@ -90,7 +99,9 @@ browser ──HTTP/SSE──▶ rookery (one static Go binary)
                         ├─ validation   podman-system-generator --dryrun (the host's own)
                         ├─ lifecycle    systemctl [--user [--machine user@.host]]
                         ├─ logs         journalctl -o json (-f)
-                        └─ host info    Podman native REST socket (read-only) + /proc
+                        ├─ host info    Podman native REST socket (read-only) + /proc
+                        ├─ updates      registry v2 digest HEAD + podman pull
+                        └─ remote hosts ssh user@host -- <the same commands over there>
 ```
 
 Design rules (from the PRD):
@@ -123,11 +134,18 @@ interface, so a native D-Bus client can replace it without touching handlers.
 | `GET /api/units/{scope}/{name}/history` | git commits for the unit |
 | `GET /api/units/{scope}/{name}/history/{commit}` | content at a commit |
 | `POST /api/units/{scope}/{name}/rollback` | `{"commit": ...}` — validate + restore |
+| `GET /api/updates` | digest drift for every container unit's image |
+| `POST /api/units/{scope}/{name}/update` | pull new image + restart |
 | `GET /api/gpus` | host GPU inventory |
 | `GET /api/host` | metrics, Podman info, scopes |
 | `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth |
 
-`{scope}` is `system` or a username.
+`{scope}` is `system`, a username, or a remote-host alias from `-remotes`.
+
+Remote-scope limits (v1): git history, SELinux hints, the GPU panel, and
+image updates apply to the local host only — the remote host's own Rookery
+(or SSH) covers those. Everything else — list, edit, validate, lifecycle,
+logs — works identically over ssh.
 
 ## Development
 
@@ -142,13 +160,15 @@ no Node toolchain required.
 
 ## Roadmap
 
-- **MVP polish**: optional `podlet` integration for edge-case conversions
+The PRD's v1 scope — Quadlet lifecycle, importer, git history, GPU panel,
+multi-host over SSH, image-update checks — is implemented.
+
+- **Polish**: optional `podlet` integration for edge-case conversions
   (the built-in converter covers the common flags/keys and warns about the
-  rest), pod-level composition view.
-- **v1 (remaining)**: agentless multi-host over SSH, image-update checks
-  (digest drift per unit, one-click pull + restart). Done: Git integration,
-  GPU panel.
-- **v2**: OIDC, read-only share links, alerting hooks, secrets integration.
+  rest), pod-level composition view, remote-host git/updates/GPU parity.
+- **v2**: OIDC / multi-admin auth, read-only share links, alerting hooks
+  (ntfy/Telegram), secrets integration (`podman secret` + systemd
+  credentials).
 
 ## License
 

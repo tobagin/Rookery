@@ -39,6 +39,38 @@ func TestScopePrefixes(t *testing.T) {
 	}
 }
 
+func TestRemoteScope(t *testing.T) {
+	// Remote system scope: ssh-wrapped plain systemctl.
+	f := &fakeRunner{}
+	m := NewManagerWithRunner(f, "alice")
+	if err := m.Start(context.Background(), Scope{SSH: "root@nas"}, "x.service"); err != nil {
+		t.Fatal(err)
+	}
+	call := strings.Join(f.calls[0], " ")
+	if !strings.HasPrefix(call, "ssh ") || !strings.Contains(call, "root@nas") ||
+		!strings.Contains(call, "'systemctl' 'start' 'x.service'") {
+		t.Errorf("remote system call = %q", call)
+	}
+	if strings.Contains(call, "--user") {
+		t.Errorf("remote system scope must not use --user: %q", call)
+	}
+
+	// Remote user scope: --user plus the session env a headless ssh needs.
+	f2 := &fakeRunner{}
+	m2 := NewManagerWithRunner(f2, "alice")
+	if err := m2.Stop(context.Background(), Scope{User: "bob", SSH: "bob@nas"}, "x.service"); err != nil {
+		t.Fatal(err)
+	}
+	call = strings.Join(f2.calls[0], " ")
+	if !strings.Contains(call, "'systemctl' '--user' 'stop' 'x.service'") ||
+		!strings.Contains(call, "XDG_RUNTIME_DIR") {
+		t.Errorf("remote user call = %q", call)
+	}
+	if strings.Contains(call, "--machine") {
+		t.Errorf("remote user scope must not use --machine: %q", call)
+	}
+}
+
 func TestDaemonReload(t *testing.T) {
 	f := &fakeRunner{}
 	m := NewManagerWithRunner(f, "alice")

@@ -14,18 +14,29 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+
+	"github.com/tobagin/rookery/internal/rhost"
 )
 
 // Scope selects which systemd manager to talk to: the system manager
-// (User == "") or a specific user's session manager.
+// (User == "") or a specific user's session manager — on this machine, or
+// on a remote host reached over ssh (SSH != "", an ssh target like
+// "root@nas.local").
 type Scope struct {
 	User string
+	SSH  string
 }
 
 func (s Scope) IsSystem() bool { return s.User == "" }
 
+// IsRemote reports whether operations for this scope run over ssh.
+func (s Scope) IsRemote() bool { return s.SSH != "" }
+
 func (s Scope) String() string {
-	if s.IsSystem() {
+	switch {
+	case s.IsRemote():
+		return s.SSH
+	case s.IsSystem():
 		return "system"
 	}
 	return s.User
@@ -101,6 +112,17 @@ func (m *Manager) args(scope Scope, rest ...string) []string {
 }
 
 func (m *Manager) run(ctx context.Context, scope Scope, rest ...string) (string, error) {
+	if scope.IsRemote() {
+		// Over ssh we are already the target account: system manager for
+		// root, that account's user manager otherwise (no --machine hop).
+		inner := []string{"systemctl"}
+		if !scope.IsSystem() {
+			inner = append(inner, "--user")
+		}
+		inner = append(inner, rest...)
+		argv := rhost.Argv(scope.SSH, rhost.Script(!scope.IsSystem(), inner))
+		return m.runner.Run(ctx, argv[0], argv[1:]...)
+	}
 	return m.runner.Run(ctx, "systemctl", m.args(scope, rest...)...)
 }
 

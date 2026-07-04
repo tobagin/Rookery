@@ -46,14 +46,14 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 	var out []unitJSON
 	scopeErrors := map[string]string{}
 	for _, area := range s.areas {
-		units, err := quadlet.Discover(area.Dirs)
+		found, err := discoverArea(r.Context(), area)
 		if err != nil {
 			scopeErrors[area.Label] = err.Error()
 			continue
 		}
-		services := make([]string, len(units))
-		for i, u := range units {
-			services[i], _ = quadlet.ServiceName(u.Name)
+		services := make([]string, len(found))
+		for i, d := range found {
+			services[i], _ = quadlet.ServiceName(d.unit.Name)
 		}
 		statuses, err := s.sysd.Status(r.Context(), area.Scope, services)
 		if err != nil {
@@ -62,25 +62,23 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 			scopeErrors[area.Label] = err.Error()
 			statuses = nil
 		}
-		for i, u := range units {
+		for i, d := range found {
 			uj := unitJSON{
-				Name:     u.Name,
-				Kind:     string(u.Kind),
+				Name:     d.unit.Name,
+				Kind:     string(d.unit.Kind),
 				Scope:    area.Label,
 				Service:  services[i],
-				Path:     u.Path,
-				ReadOnly: filepath.Dir(u.Path) != area.Dirs[0],
+				Path:     d.unit.Path,
+				ReadOnly: filepath.Dir(d.unit.Path) != area.Dirs[0],
 				Load:     "unknown",
 			}
 			if i < len(statuses) {
 				uj.fillStatus(statuses[i])
 			}
-			if data, err := os.ReadFile(u.Path); err == nil {
-				if f, err := quadlet.Parse(data); err == nil {
-					uj.Description, _ = f.Get("Unit", "Description")
-					uj.Image, _ = f.Get(sectionForKind(u.Kind), "Image")
-					uj.GPUs = quadlet.GPURefs(f)
-				}
+			if f, err := quadlet.Parse(d.data); d.data != nil && err == nil {
+				uj.Description, _ = f.Get("Unit", "Description")
+				uj.Image, _ = f.Get(sectionForKind(d.unit.Kind), "Image")
+				uj.GPUs = quadlet.GPURefs(f)
 			}
 			out = append(out, uj)
 		}
@@ -120,12 +118,17 @@ func (s *Server) resolveUnit(w http.ResponseWriter, r *http.Request) (area Area,
 		return area, "", "", false, false
 	}
 	for _, dir := range area.Dirs {
-		p := filepath.Join(dir, name)
-		if _, err := os.Stat(p); err == nil {
+		p := joinUnitPath(area, dir, name)
+		found, err := areaExists(r.Context(), area, p)
+		if err != nil {
+			httpError(w, http.StatusBadGateway, err.Error())
+			return area, "", "", false, false
+		}
+		if found {
 			return area, name, p, true, true
 		}
 	}
-	return area, name, filepath.Join(area.Dirs[0], name), false, true
+	return area, name, joinUnitPath(area, area.Dirs[0], name), false, true
 }
 
 func (s *Server) unitJSONFor(r *http.Request, area Area, name, path string) unitJSON {
@@ -154,7 +157,7 @@ func (s *Server) handleGetUnit(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, "unit file not found")
 		return
 	}
-	data, err := os.ReadFile(path)
+	data, err := areaReadFile(r.Context(), area, path)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -204,8 +207,18 @@ func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
 		"validation": validation,
 		"created":    !exists,
 		"warnings":   warnings,
-		"hints":      s.selinuxHints(req.Content),
+		"hints":      s.areaHints(area, req.Content),
 	})
+}
+
+// areaHints returns SELinux hints for local areas only — we can't see a
+// remote host's enforcement state cheaply, and a wrong hint is worse than
+// none.
+func (s *Server) areaHints(area Area, content string) []string {
+	if area.Remote() {
+		return nil
+	}
+	return s.selinuxHints(content)
 }
 
 // applySave is the one write path for unit content: validate with the host
@@ -216,14 +229,14 @@ func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
 // the source of truth — is already updated.
 func (s *Server) applySave(r *http.Request, area Area, name, path, content string, restart bool, commitMsg string) (validation quadlet.ValidationResult, warnings []string, saved bool, err error) {
 	ctx := r.Context()
-	validation, err = s.validate(ctx, !area.Scope.IsSystem(), name, content)
+	validation, err = s.areaValidate(ctx, area, name, content)
 	if err != nil {
 		return validation, nil, false, fmt.Errorf("validation failed to run: %w", err)
 	}
 	if !validation.Valid {
 		return validation, nil, false, nil
 	}
-	if err := writeFileAtomic(path, []byte(content)); err != nil {
+	if err := areaWriteFile(ctx, area, path, []byte(content)); err != nil {
 		return validation, nil, false, err
 	}
 	warnings = []string{}
@@ -270,7 +283,7 @@ func (s *Server) handleDeleteUnit(w http.ResponseWriter, r *http.Request) {
 	// Best-effort stop before removal so the container doesn't outlive its
 	// definition; a stop error (e.g. already stopped) must not block delete.
 	_ = s.sysd.Stop(r.Context(), area.Scope, service)
-	if err := os.Remove(path); err != nil {
+	if err := areaRemove(r.Context(), area, path); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -410,7 +423,7 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	path := filepath.Join(area.Dirs[0], name)
+	path := joinUnitPath(area, area.Dirs[0], name)
 	writeJSON(w, http.StatusOK, map[string]any{"unit": s.unitJSONFor(r, area, name, path)})
 }
 
@@ -428,15 +441,19 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	userScope := req.Scope != "system"
-	validation, err := s.validate(r.Context(), userScope, req.Name, req.Content)
+	area, found := s.area(req.Scope)
+	if !found {
+		httpError(w, http.StatusNotFound, "unknown scope")
+		return
+	}
+	validation, err := s.areaValidate(r.Context(), area, req.Name, req.Content)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"validation": validation,
-		"hints":      s.selinuxHints(req.Content),
+		"hints":      s.areaHints(area, req.Content),
 	})
 }
 

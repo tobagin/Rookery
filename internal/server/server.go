@@ -13,6 +13,7 @@ import (
 	"github.com/tobagin/rookery/internal/gpu"
 	"github.com/tobagin/rookery/internal/podman"
 	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/tobagin/rookery/internal/registry"
 	"github.com/tobagin/rookery/internal/systemd"
 	"github.com/tobagin/rookery/web"
 )
@@ -33,6 +34,17 @@ type Systemd interface {
 // production.
 type ValidateFunc func(ctx context.Context, userScope bool, fileName, content string) (quadlet.ValidationResult, error)
 
+// Podman is the slice of the Podman API the server uses; podman.Client in
+// production, a fake in tests. A nil Podman disables the dependent
+// features (host panel, import, update checks).
+type Podman interface {
+	Info(ctx context.Context) (*podman.Info, error)
+	Containers(ctx context.Context) ([]podman.ContainerSummary, error)
+	InspectContainer(ctx context.Context, nameOrID string) ([]byte, error)
+	ImageDigests(ctx context.Context, ref string) ([]string, error)
+	PullImage(ctx context.Context, ref string) error
+}
+
 // Area is one set of Quadlet directories managed under one systemd scope:
 // the system, or a single user. Its label is the scope path segment in the
 // API ("system" or the username).
@@ -43,21 +55,28 @@ type Area struct {
 	// created there, and units found elsewhere are read-only.
 	Dirs []string
 	// Git, when set, records every save/delete in the primary dir's
-	// repository and serves history/rollback.
+	// repository and serves history/rollback. Local areas only.
 	Git *gitstore.Store
 }
+
+// Remote reports whether this area's files and systemd live on another
+// host, reached over ssh (Scope.SSH carries the target).
+func (a Area) Remote() bool { return a.Scope.IsRemote() }
 
 // Options configures a Server; zero-value fields get safe defaults.
 type Options struct {
 	Areas    []Area
 	Systemd  Systemd
 	Validate ValidateFunc
-	Podman   *podman.Client // nil disables the Podman panel
+	Podman   Podman // nil disables the Podman panel, import, and updates
 	Version  string
 	Password string      // empty disables authentication
 	SELinux  func() bool // nil -> detect on the host
 	// GPUs enumerates host GPUs; nil -> gpu.Detect. Injectable for tests.
 	GPUs func(ctx context.Context) []gpu.Device
+	// ResolveDigest fetches an image tag's current registry digest;
+	// nil -> a real registry client. Injectable for tests.
+	ResolveDigest func(ctx context.Context, image string) (string, error)
 }
 
 // Server routes API and UI requests.
@@ -65,7 +84,8 @@ type Server struct {
 	areas    []Area
 	sysd     Systemd
 	validate ValidateFunc
-	pod      *podman.Client
+	pod      Podman
+	resolve  func(ctx context.Context, image string) (string, error)
 	version  string
 	password string
 	selinux  func() bool
@@ -85,6 +105,7 @@ func New(opts Options) *Server {
 		password: opts.Password,
 		selinux:  opts.SELinux,
 		gpus:     opts.GPUs,
+		resolve:  opts.ResolveDigest,
 		sess:     newSessions(),
 		mux:      http.NewServeMux(),
 	}
@@ -96,6 +117,9 @@ func New(opts Options) *Server {
 	}
 	if s.gpus == nil {
 		s.gpus = gpu.Detect
+	}
+	if s.resolve == nil {
+		s.resolve = registry.NewClient().ResolveDigest
 	}
 	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
@@ -114,6 +138,8 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("POST /api/validate", s.handleValidate)
 	s.mux.HandleFunc("GET /api/host", s.handleHost)
 	s.mux.HandleFunc("GET /api/gpus", s.handleGPUs)
+	s.mux.HandleFunc("GET /api/updates", s.handleUpdates)
+	s.mux.HandleFunc("POST /api/units/{scope}/{name}/update", s.handleUpdateUnit)
 	s.mux.Handle("GET /", http.FileServerFS(web.Files))
 	return s
 }
