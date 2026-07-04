@@ -5,9 +5,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tobagin/rookery/internal/systemd"
 )
+
+func timeNowPlusShareTTL() time.Time { return time.Now().Add(shareTTL) }
+func timeNowMinusHour() time.Time    { return time.Now().Add(-time.Hour) }
 
 func newAuthServer(t *testing.T) *Server {
 	t.Helper()
@@ -78,6 +82,70 @@ func TestLoginFlow(t *testing.T) {
 	srv.ServeHTTP(rec3, req)
 	if rec3.Code != http.StatusUnauthorized {
 		t.Errorf("revoked token still accepted: status %d, want 401", rec3.Code)
+	}
+}
+
+func TestShareLinks(t *testing.T) {
+	srv := newAuthServer(t)
+
+	// Minting needs an admin session.
+	rec, _ := doJSON(t, srv, "POST", "/api/share", "{}")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated mint: status %d, want 401", rec.Code)
+	}
+	token := srv.mintShare(timeNowPlusShareTTL())
+
+	get := func(path, tok string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, strings.NewReader(""))
+		req.AddCookie(&http.Cookie{Name: shareCookie, Value: tok})
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := get("/api/units", token); rec.Code != http.StatusOK {
+		t.Errorf("share GET /api/units: status %d, want 200", rec.Code)
+	}
+
+	// Writes are forbidden, not just hidden.
+	req := httptest.NewRequest("POST", "/api/units/system/x.container/action", strings.NewReader(`{"action":"stop"}`))
+	req.AddCookie(&http.Cookie{Name: shareCookie, Value: token})
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusForbidden {
+		t.Errorf("share POST: status %d, want 403", rec2.Code)
+	}
+
+	// /api/auth reports read-only so the UI can adapt.
+	req = httptest.NewRequest("GET", "/api/auth", strings.NewReader(""))
+	req.AddCookie(&http.Cookie{Name: shareCookie, Value: token})
+	rec3 := httptest.NewRecorder()
+	srv.ServeHTTP(rec3, req)
+	if !strings.Contains(rec3.Body.String(), `"readOnly":true`) {
+		t.Errorf("auth status = %s", rec3.Body.String())
+	}
+
+	// Tampered and expired tokens are rejected.
+	if rec := get("/api/units", token+"ff"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("tampered token: status %d, want 401", rec.Code)
+	}
+	expired := srv.mintShare(timeNowMinusHour())
+	if rec := get("/api/units", expired); rec.Code != http.StatusUnauthorized {
+		t.Errorf("expired token: status %d, want 401", rec.Code)
+	}
+
+	// ?share= on the first visit sets the cookie.
+	req = httptest.NewRequest("GET", "/?share="+token, strings.NewReader(""))
+	rec4 := httptest.NewRecorder()
+	srv.ServeHTTP(rec4, req)
+	found := false
+	for _, c := range rec4.Result().Cookies() {
+		if c.Name == shareCookie && c.Value == token {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("visiting /?share= did not set the share cookie")
 	}
 }
 

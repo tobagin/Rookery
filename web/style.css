@@ -411,6 +411,16 @@ textarea[readonly] { opacity: 0.7; }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
+/* ---------- read-only share mode (server enforces; this is cosmetics) ---------- */
+
+body.readonly .card .actions,
+body.readonly header .btn,
+body.readonly .toolbar button,
+body.readonly .hist-restore,
+body.readonly #gpu-helper,
+body.readonly #btn-pull-update,
+body.readonly .chk { display: none !important; }
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 640px) {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tobagin/rookery/internal/alert"
 	"github.com/tobagin/rookery/internal/gitstore"
 	"github.com/tobagin/rookery/internal/podman"
 	"github.com/tobagin/rookery/internal/quadlet"
@@ -36,6 +37,8 @@ func main() {
 		"track unit directories in git: commit on save, history, rollback (auto-enabled for dirs that are already repositories)")
 	remotes := flag.String("remotes", envOr("ROOKERY_REMOTES", ""),
 		`comma-separated remote hosts to manage over ssh, as alias=user@host (e.g. "nas=root@nas.local,media=deploy@media.lan")`)
+	alerts := flag.String("alerts", envOr("ROOKERY_ALERTS", ""),
+		`comma-separated failure-alert destinations: ntfy://host/topic, telegram://BOT_TOKEN@CHAT_ID, or an http(s) webhook URL`)
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -70,6 +73,19 @@ func main() {
 		Version:  version,
 		Password: password,
 	})
+
+	if *alerts != "" {
+		notifier, err := alert.Parse(*alerts)
+		if err != nil {
+			log.Fatal(err)
+		}
+		go srv.WatchFailures(context.Background(), 30*time.Second, func(title, msg string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			notifier.Send(ctx, title, msg)
+		})
+		log.Printf("failure alerts enabled (%s)", *alerts)
+	}
 
 	labels := make([]string, len(areas))
 	for i, a := range areas {

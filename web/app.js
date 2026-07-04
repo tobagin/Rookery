@@ -10,11 +10,13 @@ const $hoststrip = document.getElementById("hoststrip");
 
 let refreshTimer = null;
 let logSource = null;
-let authState = { required: false, authenticated: true };
+let authState = { required: false, authenticated: true, readOnly: false };
 // Last "check image updates" result, keyed by scope/name; survives the
 // dashboard's periodic re-render.
 let updateInfo = {};
 let updateSummary = "";
+// Last stale-image probe ({count, bytes}); refreshed by the updates check.
+let staleInfo = null;
 
 /* ---------- helpers ---------- */
 
@@ -59,6 +61,12 @@ function stateLabel(u) {
 function stopStreams() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
   if (logSource) { logSource.close(); logSource = null; }
+}
+
+function fmtBytes(n) {
+  if (n < 1048576) return Math.max(1, Math.round(n / 1024)) + " KB";
+  if (n < 1073741824) return Math.round(n / 1048576) + " MB";
+  return (n / 1073741824).toFixed(1) + " GB";
 }
 
 function toast(msg, isError) {
@@ -141,7 +149,7 @@ function enhanceEditor($ta) {
 async function checkAuth() {
   try {
     const { body } = await api("/api/auth");
-    authState = { required: !!body.required, authenticated: !!body.authenticated };
+    authState = { required: !!body.required, authenticated: !!body.authenticated, readOnly: !!body.readOnly };
   } catch { /* open mode if unreachable; the next call will re-ask */ }
 }
 
@@ -195,12 +203,29 @@ async function renderHostStrip() {
     if (body.podman) bits.push(`<span class="chip">podman ${esc(body.podman.version)}</span>`);
     if (body.selinuxEnforcing) bits.push(`<span class="chip" title="SELinux is enforcing; Rookery will hint about unlabeled bind mounts">selinux</span>`);
     if (!body.generatorAvailable) bits.push(`<span class="chip chip-warn" title="podman quadlet generator not found; validation disabled">no validator</span>`);
-    if (authState.required && authState.authenticated) {
+    if (authState.readOnly) {
+      bits.push(`<span class="chip chip-warn" title="opened via a read-only share link">read-only</span>`);
+    } else if (authState.required && authState.authenticated) {
+      bits.push(`<a class="chip" href="#" id="btn-share" title="copy a 7-day read-only share link">share</a>`);
       bits.push(`<a class="chip" href="#" id="btn-logout" title="sign out">logout</a>`);
     }
     $hoststrip.innerHTML = bits.join("");
     const lo = document.getElementById("btn-logout");
     if (lo) lo.addEventListener("click", ev => { ev.preventDefault(); logout(); });
+    const sh = document.getElementById("btn-share");
+    if (sh) sh.addEventListener("click", async ev => {
+      ev.preventDefault();
+      try {
+        const { body } = await api("/api/share", { method: "POST", body: "{}" });
+        const url = `${location.origin}/?share=${encodeURIComponent(body.token)}`;
+        try {
+          await navigator.clipboard.writeText(url);
+          toast("read-only link copied — valid 7 days");
+        } catch {
+          prompt("Read-only share link (valid 7 days):", url);
+        }
+      } catch (e) { toast(e.message, true); }
+    });
   } catch { /* strip is decorative; never block the app on it */ }
 }
 
@@ -314,6 +339,10 @@ async function renderDashboard() {
     ${units.length ? `<div class="toolbar updates-bar">
       <button class="btn" id="btn-check-updates">Check image updates</button>
       <span class="muted">${esc(updateSummary)}</span>
+      ${staleInfo && staleInfo.count ? `
+        <span class="muted">·</span>
+        <span>${staleInfo.count} stale image${staleInfo.count === 1 ? "" : "s"} (${fmtBytes(staleInfo.bytes)})</span>
+        <button class="btn" id="btn-prune" title="remove dangling images left behind by updates">Prune</button>` : ""}
     </div>` : ""}`;
 
   const $filter = document.getElementById("filter");
@@ -342,9 +371,24 @@ async function renderDashboard() {
         if ((body.skippedScopes || []).length) {
           updateSummary += ` — remote scopes skipped: ${body.skippedScopes.join(", ")}`;
         }
+        staleInfo = (await api("/api/images/stale").catch(() => ({ body: null }))).body;
       } catch (e) {
         toast(e.message, true);
       }
+      renderDashboard();
+    });
+  }
+
+  const $prune = document.getElementById("btn-prune");
+  if ($prune) {
+    $prune.addEventListener("click", async () => {
+      $prune.disabled = true;
+      $prune.textContent = "pruning…";
+      try {
+        const { body } = await api("/api/images/prune", { method: "POST", body: "{}" });
+        toast(`pruned — reclaimed ${fmtBytes(body.reclaimedBytes || 0)}`);
+        staleInfo = (await api("/api/images/stale").catch(() => ({ body: null }))).body;
+      } catch (e) { toast(e.message, true); }
       renderDashboard();
     });
   }
@@ -476,6 +520,9 @@ async function renderUnit(scope, name) {
           <option value="nvidia">NVIDIA — all GPUs (CDI)</option>
           <option value="vaapi">Intel/AMD video (VAAPI, /dev/dri)</option>
           <option value="rocm">AMD compute (ROCm)</option>
+        </select>
+        <select id="secret-helper" class="input" title="insert Secret= into [Container]">
+          <option value="">Add secret…</option>
         </select>` : ""}
       </div>
       <div id="validation"></div>
@@ -596,6 +643,25 @@ async function renderUnit(scope, name) {
       if (lines[0].includes("nvidia")) {
         toast("CDI attachment added — requires nvidia-container-toolkit with generated CDI specs on the host");
       }
+    });
+  }
+
+  const $secHelper = document.getElementById("secret-helper");
+  if ($secHelper) {
+    api("/api/secrets").then(({ body }) => {
+      (body.secrets || []).forEach(sec => {
+        const o = document.createElement("option");
+        o.value = sec.name;
+        o.textContent = sec.name;
+        $secHelper.appendChild(o);
+      });
+    }).catch(() => { $secHelper.hidden = true; });
+    $secHelper.addEventListener("change", () => {
+      const secretName = $secHelper.value;
+      $secHelper.value = "";
+      if (!secretName) return;
+      $editor.value = insertIntoSection($editor.value, "Container", [`Secret=${secretName}`]);
+      $editor.dispatchEvent(new Event("input"));
     });
   }
 
@@ -926,6 +992,74 @@ async function renderImport() {
   }
 }
 
+/* ---------- secrets ---------- */
+
+async function renderSecrets() {
+  $app.innerHTML = `
+    <div class="detail-head"><a class="btn btn-sm" href="#/">←</a><h1>Secrets</h1></div>
+    <p class="muted">Podman secrets are write-only: set a value here, reference it from a unit with
+      <code>Secret=name</code> (the editor's "Add secret…" helper inserts it) — the value can never be read back.</p>
+    <div id="sec-list"><p class="muted">loading…</p></div>
+    <section>
+      <h2>New secret</h2>
+      <div class="toolbar">
+        <input id="sec-name" class="input" placeholder="name (e.g. db-password)" autocomplete="off">
+      </div>
+      <textarea id="sec-value" spellcheck="false" placeholder="secret value" style="min-height:80px"></textarea>
+      <div class="toolbar"><button class="btn btn-accent" id="sec-create">Create</button></div>
+    </section>`;
+
+  const $list = document.getElementById("sec-list");
+  async function loadList() {
+    try {
+      const { body } = await api("/api/secrets");
+      const rows = body.secrets || [];
+      const used = body.usedBy || {};
+      if (!rows.length) {
+        $list.innerHTML = `<p class="muted">No secrets yet.</p>`;
+        return;
+      }
+      $list.innerHTML = rows.map(sec => `
+        <div class="history-row">
+          <span class="mono">${esc(sec.name)}</span>
+          <span class="badge">${esc(sec.driver || "file")}</span>
+          <span class="hist-subject muted">${(used[sec.name] || []).map(ref => {
+            const [sc, n] = [ref.slice(0, ref.indexOf("/")), ref.slice(ref.indexOf("/") + 1)];
+            return `<a href="#/unit/${encodeURIComponent(sc)}/${encodeURIComponent(n)}">${esc(n)}</a>`;
+          }).join(", ") || "not referenced by any unit"}</span>
+          <span class="actions"><button class="btn btn-sm btn-danger sec-del" data-name="${esc(sec.name)}">delete</button></span>
+        </div>`).join("");
+      $list.querySelectorAll(".sec-del").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.name;
+          if (!confirm(`Delete secret ${name}? Units cannot reference it afterwards.`)) return;
+          try {
+            await api(`/api/secrets/${encodeURIComponent(name)}`, { method: "DELETE" });
+            toast(`deleted secret ${name}`);
+          } catch (e) { toast(e.message, true); }
+          loadList();
+        });
+      });
+    } catch (e) {
+      $list.innerHTML = `<p class="banner banner-warn">${esc(e.message)}</p>`;
+    }
+  }
+  await loadList();
+
+  document.getElementById("sec-create").addEventListener("click", async () => {
+    const name = document.getElementById("sec-name").value.trim();
+    const data = document.getElementById("sec-value").value;
+    if (!name || !data) { toast("name and value are required", true); return; }
+    try {
+      await api("/api/secrets", { method: "POST", body: JSON.stringify({ name, data }) });
+      toast(`created secret ${name}`);
+      document.getElementById("sec-name").value = "";
+      document.getElementById("sec-value").value = "";
+      loadList();
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
 /* ---------- router ---------- */
 
 async function render() {
@@ -934,8 +1068,12 @@ async function render() {
     renderLogin();
     return;
   }
+  document.body.classList.toggle("readonly", authState.readOnly);
   renderHostStrip();
-  const hash = location.hash || "#/";
+  let hash = location.hash || "#/";
+  if (authState.readOnly && (hash.startsWith("#/new") || hash.startsWith("#/import"))) {
+    hash = "#/"; // mutating views are pointless on a read-only link
+  }
   const parts = hash.slice(2).split("/").filter(Boolean).map(decodeURIComponent);
   try {
     if (parts[0] === "unit" && parts.length === 3) {
@@ -944,6 +1082,8 @@ async function render() {
       await renderNew();
     } else if (parts[0] === "import") {
       await renderImport();
+    } else if (parts[0] === "secrets") {
+      await renderSecrets();
     } else {
       await renderDashboard();
       refreshTimer = setInterval(() => {

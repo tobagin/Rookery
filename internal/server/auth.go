@@ -1,12 +1,14 @@
 package server
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +16,9 @@ import (
 
 const (
 	sessionCookie = "rookery_session"
+	shareCookie   = "rookery_share"
 	sessionTTL    = 7 * 24 * time.Hour
+	shareTTL      = 7 * 24 * time.Hour
 )
 
 // sessions is an in-memory token store — deliberate: restarting Rookery
@@ -80,10 +84,70 @@ func (s *Server) authenticated(r *http.Request) bool {
 	return err == nil && s.sess.valid(c.Value)
 }
 
+/* ---------- read-only share links ----------
+   A share token is expiry.HMAC(expiry), keyed off the admin password: it
+   survives restarts with no state on disk, and changing the password
+   revokes every outstanding link. Share access is enforced GET-only in
+   ServeHTTP — the UI hiding buttons is cosmetics, this is the boundary. */
+
+func (s *Server) shareKey() []byte {
+	h := sha256.Sum256([]byte("rookery-share:" + s.password))
+	return h[:]
+}
+
+func (s *Server) mintShare(expiry time.Time) string {
+	msg := strconv.FormatInt(expiry.Unix(), 10)
+	mac := hmac.New(sha256.New, s.shareKey())
+	mac.Write([]byte("share:" + msg))
+	return msg + "." + hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) shareValid(token string) bool {
+	expStr, sig, ok := strings.Cut(token, ".")
+	if !ok {
+		return false
+	}
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil || time.Now().Unix() > exp {
+		return false
+	}
+	mac := hmac.New(sha256.New, s.shareKey())
+	mac.Write([]byte("share:" + expStr))
+	want, err := hex.DecodeString(sig)
+	return err == nil && hmac.Equal(mac.Sum(nil), want)
+}
+
+// shareAccess reports whether the request carries a valid share token
+// (query param on first visit, cookie afterwards).
+func (s *Server) shareAccess(r *http.Request) bool {
+	if s.password == "" {
+		return false
+	}
+	if tok := r.URL.Query().Get("share"); tok != "" && s.shareValid(tok) {
+		return true
+	}
+	c, err := r.Cookie(shareCookie)
+	return err == nil && s.shareValid(c.Value)
+}
+
+func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
+	if s.password == "" {
+		httpError(w, http.StatusBadRequest, "no admin password is set — this instance is already open")
+		return
+	}
+	token := s.mintShare(time.Now().Add(shareTTL))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":   token,
+		"expires": time.Now().Add(shareTTL).Unix(),
+	})
+}
+
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	share := s.password != "" && !s.authenticated(r) && s.shareAccess(r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"required":      s.password != "",
-		"authenticated": s.password == "" || s.authenticated(r),
+		"authenticated": s.password == "" || s.authenticated(r) || share,
+		"readOnly":      share,
 	})
 }
 

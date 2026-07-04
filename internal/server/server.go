@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/tobagin/rookery/internal/gitstore"
 	"github.com/tobagin/rookery/internal/gpu"
@@ -152,6 +153,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
+	s.mux.HandleFunc("POST /api/share", s.handleShare)
 	s.mux.HandleFunc("POST /api/convert", s.handleConvert)
 	s.mux.HandleFunc("GET /api/import/containers", s.handleImportContainers)
 	s.mux.HandleFunc("GET /api/units", s.handleListUnits)
@@ -168,14 +170,34 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("GET /api/gpus", s.handleGPUs)
 	s.mux.HandleFunc("GET /api/updates", s.handleUpdates)
 	s.mux.HandleFunc("POST /api/units/{scope}/{name}/update", s.handleUpdateUnit)
+	s.mux.HandleFunc("GET /api/secrets", s.handleListSecrets)
+	s.mux.HandleFunc("POST /api/secrets", s.handleCreateSecret)
+	s.mux.HandleFunc("DELETE /api/secrets/{name}", s.handleDeleteSecret)
+	s.mux.HandleFunc("GET /api/images/stale", s.handleStaleImages)
+	s.mux.HandleFunc("POST /api/images/prune", s.handlePruneImages)
 	s.mux.Handle("GET /", http.FileServerFS(web.Files))
 	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A share link's first visit carries ?share=; persist it as a cookie so
+	// the SPA's API calls inherit the access.
+	if tok := r.URL.Query().Get("share"); tok != "" && s.password != "" && s.shareValid(tok) {
+		http.SetCookie(w, &http.Cookie{
+			Name: shareCookie, Value: tok, Path: "/",
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil,
+		})
+	}
 	if s.authRequired(r) && !s.authenticated(r) {
-		httpError(w, http.StatusUnauthorized, "authentication required")
-		return
+		if !s.shareAccess(r) {
+			httpError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		// GET-only, and no secrets metadata for viewers.
+		if r.Method != http.MethodGet || strings.HasPrefix(r.URL.Path, "/api/secrets") {
+			httpError(w, http.StatusForbidden, "this is a read-only share link")
+			return
+		}
 	}
 	s.mux.ServeHTTP(w, r)
 }

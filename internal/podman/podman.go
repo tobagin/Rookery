@@ -4,6 +4,7 @@
 package podman
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -173,6 +174,144 @@ func (c *Client) ImageDigests(ctx context.Context, ref string) ([]string, error)
 		digests = append(digests, raw.Digest)
 	}
 	return digests, nil
+}
+
+// StaleImages reports the dangling images old updates leave behind:
+// how many, and how many bytes pruning would reclaim.
+func (c *Client) StaleImages(ctx context.Context) (count int, size int64, err error) {
+	resp, err := c.get(ctx, "/images/json?filters="+url.QueryEscape(`{"dangling":["true"]}`))
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	var raw []struct {
+		Size int64 `json:"Size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return 0, 0, err
+	}
+	for _, img := range raw {
+		size += img.Size
+	}
+	return len(raw), size, nil
+}
+
+// PruneImages removes dangling images and returns the bytes reclaimed.
+func (c *Client) PruneImages(ctx context.Context) (int64, error) {
+	u := "http://d/v5.0.0/libpod/images/prune?filters=" + url.QueryEscape(`{"dangling":["true"]}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.pullHTTP.Do(req) // pruning many layers can be slow
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("podman image prune: %s: %s", resp.Status, apiErrorBody(resp.Body))
+	}
+	var raw []struct {
+		Size int64  `json:"Size"`
+		Err  string `json:"Err"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return 0, err
+	}
+	var reclaimed int64
+	for _, r := range raw {
+		if r.Err == "" {
+			reclaimed += r.Size
+		}
+	}
+	return reclaimed, nil
+}
+
+// Secret is one podman secret as the secrets page lists it. Values are
+// write-only — the API deliberately never returns secret data.
+type Secret struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Driver    string `json:"driver"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// Secrets lists the host's podman secrets.
+func (c *Client) Secrets(ctx context.Context) ([]Secret, error) {
+	resp, err := c.get(ctx, "/secrets/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var raw []struct {
+		ID        string `json:"ID"`
+		CreatedAt string `json:"CreatedAt"`
+		Spec      struct {
+			Name   string `json:"Name"`
+			Driver struct {
+				Name string `json:"Name"`
+			} `json:"Driver"`
+		} `json:"Spec"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	out := []Secret{}
+	for _, s := range raw {
+		out = append(out, Secret{ID: s.ID, Name: s.Spec.Name, Driver: s.Spec.Driver.Name, CreatedAt: s.CreatedAt})
+	}
+	return out, nil
+}
+
+// CreateSecret stores data under name. Podman rejects duplicates.
+func (c *Client) CreateSecret(ctx context.Context, name string, data []byte) error {
+	u := "http://d/v5.0.0/libpod/secrets/create?name=" + url.QueryEscape(name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("podman secret create %s: %s: %s", name, resp.Status, apiErrorBody(resp.Body))
+	}
+	return nil
+}
+
+// RemoveSecret deletes the named secret.
+func (c *Client) RemoveSecret(ctx context.Context, name string) error {
+	u := "http://d/v5.0.0/libpod/secrets/" + url.PathEscape(name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("podman secret rm %s: %s: %s", name, resp.Status, apiErrorBody(resp.Body))
+	}
+	return nil
+}
+
+// apiErrorBody extracts libpod's error message from a failed response.
+func apiErrorBody(r io.Reader) string {
+	var e struct {
+		Message string `json:"message"`
+		Cause   string `json:"cause"`
+	}
+	if err := json.NewDecoder(r).Decode(&e); err != nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Cause
 }
 
 // PullImage pulls ref through the Podman API and waits for completion.
