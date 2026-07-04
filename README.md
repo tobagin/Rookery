@@ -39,13 +39,22 @@ What works today:
 - **Rootless-aware** — run rootless to manage your own
   `~/.config/containers/systemd/`; run rootful with `-users alice,bob` to
   additionally manage those users' sessions (via `systemctl --user --machine`).
+- **Git history & rollback** — with `-git` (or when the unit directory is
+  already a repository), every save/delete/rollback becomes a commit; the
+  unit page lists history with per-revision diffs and one-click restore,
+  which re-validates the old content before writing it. The repo is plain
+  git in the unit directory — fully usable without Rookery.
+- **GPU panel** — host GPU inventory on the dashboard (NVIDIA via
+  `nvidia-smi`, AMD VRAM/busy via amdgpu sysfs, Intel presence), per-unit
+  attachment badges (`AddDevice=nvidia.com/gpu=…`, `/dev/dri`, `--gpus`),
+  and an editor helper that inserts CDI / VAAPI / ROCm device lines.
 - **Admin login** — single-password auth (`ROOKERY_PASSWORD` or
   `-password-file`) with in-memory sessions; without a password Rookery is
   open and warns loudly unless bound to loopback.
 - **Mobile-responsive UI** — passes the "restart it from the couch" test.
 - **Single static binary**, zero Go dependencies outside the standard library.
 
-Not yet: Git history, GPU panel, multi-host, image-update checks. See the
+Not yet: multi-host over SSH, image-update checks. See the
 [roadmap](#roadmap).
 
 > ⚠️ Set a password (`ROOKERY_PASSWORD` or `-password-file`) before exposing
@@ -68,6 +77,7 @@ make build          # or: go build ./cmd/rookery
 | `-listen` | `ROOKERY_LISTEN` | `127.0.0.1:7878` | listen address |
 | `-users` | `ROOKERY_USERS` | — | extra users to manage (rootful only) |
 | `-password-file` | `ROOKERY_PASSWORD_FILE` | — | admin password file (or set `ROOKERY_PASSWORD`) |
+| `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
 
 Dogfooding: [packaging/rookery.container](packaging/rookery.container) runs
 Rookery itself as a Quadlet.
@@ -110,6 +120,10 @@ interface, so a native D-Bus client can replace it without touching handlers.
 | `POST /api/validate` | dry-run a unit body without saving |
 | `POST /api/convert` | `{"kind": "run\|compose\|container", "input": ...}` → draft units |
 | `GET /api/import/containers` | existing containers eligible for import |
+| `GET /api/units/{scope}/{name}/history` | git commits for the unit |
+| `GET /api/units/{scope}/{name}/history/{commit}` | content at a commit |
+| `POST /api/units/{scope}/{name}/rollback` | `{"commit": ...}` — validate + restore |
+| `GET /api/gpus` | host GPU inventory |
 | `GET /api/host` | metrics, Podman info, scopes |
 | `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth |
 
@@ -131,9 +145,9 @@ no Node toolchain required.
 - **MVP polish**: optional `podlet` integration for edge-case conversions
   (the built-in converter covers the common flags/keys and warns about the
   rest), pod-level composition view.
-- **v1**: agentless multi-host over SSH, Git integration (commit on save,
-  history, rollback), GPU panel (attachments, utilization, CDI helper),
-  image-update checks.
+- **v1 (remaining)**: agentless multi-host over SSH, image-update checks
+  (digest drift per unit, one-click pull + restart). Done: Git integration,
+  GPU panel.
 - **v2**: OIDC, read-only share links, alerting hooks, secrets integration.
 
 ## License

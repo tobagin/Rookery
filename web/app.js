@@ -203,8 +203,35 @@ async function renderHostStrip() {
 
 /* ---------- dashboard ---------- */
 
+function meter(label, pct, text) {
+  return `<span class="meter" title="${esc(label)}">
+    <span class="meter-fill" style="width:${Math.min(100, Math.max(0, pct))}%"></span>
+    <span class="meter-text">${esc(label)} ${esc(text)}</span>
+  </span>`;
+}
+
+async function gpuPanelHTML() {
+  try {
+    const { body } = await api("/api/gpus");
+    const devices = body.devices || [];
+    if (!devices.length) return "";
+    return `<h2 class="group-title">GPUs</h2><div class="gpu-panel">` + devices.map(d => {
+      const memText = d.memoryTotalMb > 0
+        ? `${d.memoryUsedMb >= 0 ? d.memoryUsedMb : "?"} / ${d.memoryTotalMb} MB` : "";
+      const memPct = d.memoryTotalMb > 0 && d.memoryUsedMb >= 0
+        ? Math.round(100 * d.memoryUsedMb / d.memoryTotalMb) : null;
+      return `<div class="gpu-row">
+        <span class="badge badge-gpu">${esc(d.vendor)}</span>
+        <span class="gpu-name">${esc(d.name)}</span>
+        ${d.utilizationPct >= 0 ? meter("util", d.utilizationPct, d.utilizationPct + "%") : ""}
+        ${memPct != null ? meter("vram", memPct, memText) : ""}
+      </div>`;
+    }).join("") + `</div>`;
+  } catch { return ""; }
+}
+
 async function renderDashboard() {
-  const { body } = await api("/api/units");
+  const [{ body }, gpuHTML] = await Promise.all([api("/api/units"), gpuPanelHTML()]);
   const units = body.units || [];
   const groups = { failed: [], running: [], pending: [], stopped: [], unknown: [] };
   units.forEach(u => groups[stateClass(u)].push(u));
@@ -218,6 +245,7 @@ async function renderDashboard() {
 
   $app.innerHTML = `
     ${scopeErrors}
+    ${gpuHTML}
     ${units.length ? "" : `<div class="empty">
        <p>No Quadlet units found.</p>
        <p class="muted">Create one with <a href="#/new">＋ New unit</a>, or convert an existing
@@ -255,6 +283,7 @@ function card(u) {
       <span class="badge">${esc(u.kind)}</span>
       ${u.scope !== "system" ? `<span class="badge badge-user" title="rootless unit of ${esc(u.scope)}">${esc(u.scope)}</span>` : ""}
       ${loop ? `<span class="badge badge-loop" title="service restarted ${u.restarts} times — likely a crash loop">↻${u.restarts}</span>` : ""}
+      ${u.gpus && u.gpus.length ? `<span class="badge badge-gpu" title="${esc(u.gpus.join(", "))}">gpu</span>` : ""}
     </div>
     <div class="card-sub">${esc(u.description || u.image || "")}</div>
     <div class="card-foot">
@@ -305,6 +334,7 @@ async function renderUnit(scope, name) {
       <span class="badge">${esc(unit.kind)}</span>
       ${scope !== "system" ? `<span class="badge badge-user">${esc(scope)}</span>` : ""}
       ${loop ? `<span class="badge badge-loop" title="restart count since last stop">↻${unit.restarts}</span>` : ""}
+      ${(unit.gpus || []).map(g => `<span class="badge badge-gpu">${esc(g)}</span>`).join("")}
       <span class="state">${esc(stateLabel(unit))}${unit.unitFile ? " · " + esc(unit.unitFile) : ""}</span>
     </div>
     <p class="muted mono">${esc(unit.path)}${unit.readOnly ? " (read-only)" : ""}</p>
@@ -320,8 +350,19 @@ async function renderUnit(scope, name) {
         <button class="btn" id="btn-validate">Validate</button>
         <button class="btn btn-accent" id="btn-save" ${unit.readOnly ? "disabled" : ""}>Save + reload</button>
         <label class="chk"><input type="checkbox" id="chk-restart"> restart after save</label>
+        ${unit.kind === "container" && !unit.readOnly ? `
+        <select id="gpu-helper" class="input" title="insert a GPU attachment into [Container]">
+          <option value="">Add GPU…</option>
+          <option value="nvidia">NVIDIA — all GPUs (CDI)</option>
+          <option value="vaapi">Intel/AMD video (VAAPI, /dev/dri)</option>
+          <option value="rocm">AMD compute (ROCm)</option>
+        </select>` : ""}
       </div>
       <div id="validation"></div>
+    </section>
+    <section>
+      <h2>History</h2>
+      <div id="history"><p class="muted">loading…</p></div>
     </section>
     <section>
       <h2>Logs <label class="chk"><input type="checkbox" id="chk-follow" checked> follow</label></h2>
@@ -399,8 +440,102 @@ async function renderUnit(scope, name) {
     document.getElementById("btn-cancel-save").addEventListener("click", () => { $validation.innerHTML = ""; });
   });
 
+  const $gpuHelper = document.getElementById("gpu-helper");
+  if ($gpuHelper) {
+    const GPU_SNIPPETS = {
+      nvidia: ["AddDevice=nvidia.com/gpu=all"],
+      vaapi: ["AddDevice=/dev/dri"],
+      rocm: ["AddDevice=/dev/dri", "AddDevice=/dev/kfd"],
+    };
+    $gpuHelper.addEventListener("change", () => {
+      const lines = GPU_SNIPPETS[$gpuHelper.value];
+      $gpuHelper.value = "";
+      if (!lines) return;
+      $editor.value = insertIntoSection($editor.value, "Container", lines);
+      $editor.dispatchEvent(new Event("input")); // refresh highlighting
+      if (lines[0].includes("nvidia")) {
+        toast("CDI attachment added — requires nvidia-container-toolkit with generated CDI specs on the host");
+      }
+    });
+  }
+
+  loadHistory(scope, name, () => $editor.value);
+
   startLogs(scope, name);
   document.getElementById("chk-follow").addEventListener("change", () => startLogs(scope, name));
+}
+
+// insertIntoSection adds lines right below the [section] header, creating
+// the section at the end when it's missing.
+function insertIntoSection(text, section, lines) {
+  const marker = `[${section}]`;
+  const idx = text.indexOf(marker);
+  if (idx < 0) {
+    return text.trimEnd() + `\n\n${marker}\n${lines.join("\n")}\n`;
+  }
+  const nl = text.indexOf("\n", idx + marker.length);
+  const pos = nl < 0 ? text.length : nl + 1;
+  return text.slice(0, pos) + lines.join("\n") + "\n" + text.slice(pos);
+}
+
+async function loadHistory(scope, name, currentContent) {
+  const $hist = document.getElementById("history");
+  let body;
+  try {
+    body = (await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/history`)).body;
+  } catch (e) {
+    $hist.innerHTML = `<p class="banner banner-warn">${esc(e.message)}</p>`;
+    return;
+  }
+  if (!body.enabled) {
+    $hist.innerHTML = `<p class="muted">Git history is off for this scope — start Rookery with <code>-git</code>
+      (or make the unit directory a git repository) to record every save and enable rollback.</p>`;
+    return;
+  }
+  const commits = body.commits || [];
+  if (!commits.length) {
+    $hist.innerHTML = `<p class="muted">No commits for this unit yet; the next save will create one.</p>`;
+    return;
+  }
+  $hist.innerHTML = commits.map(c => `
+    <div class="history-row" data-hash="${esc(c.hash)}">
+      <span class="mono muted">${esc(c.hash.slice(0, 10))}</span>
+      <span class="muted">${new Date(c.time * 1000).toLocaleString()}</span>
+      <span class="hist-subject">${esc(c.subject)}</span>
+      <span class="actions">
+        <button class="btn btn-sm hist-diff">diff</button>
+        <button class="btn btn-sm hist-restore">restore</button>
+      </span>
+    </div>`).join("") + `<div id="hist-view"></div>`;
+
+  const $view = document.getElementById("hist-view");
+  $hist.querySelectorAll(".history-row").forEach(row => {
+    const hash = row.dataset.hash;
+    const short = hash.slice(0, 10);
+    row.querySelector(".hist-diff").addEventListener("click", async () => {
+      try {
+        const { body } = await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/history/${hash}`);
+        $view.innerHTML = `<p class="muted">what restoring ${esc(short)} would change (current → ${esc(short)}):</p>` +
+          diffHTML(currentContent(), body.content);
+      } catch (e) { toast(e.message, true); }
+    });
+    row.querySelector(".hist-restore").addEventListener("click", async () => {
+      if (!confirm(`Restore ${name} to ${short}? The content is validated, written to disk, and daemon-reload runs.`)) return;
+      try {
+        const { status, body } = await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/rollback`, {
+          method: "POST",
+          body: JSON.stringify({ commit: hash }),
+        });
+        if (status === 422) {
+          toast("rollback rejected: that revision no longer validates on this host", true);
+          return;
+        }
+        (body.warnings || []).forEach(warning => toast(warning, true));
+        toast(`restored ${name} to ${short}`);
+        render();
+      } catch (e) { toast(e.message, true); }
+    });
+  });
 }
 
 function startLogs(scope, name) {

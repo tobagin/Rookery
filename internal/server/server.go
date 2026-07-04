@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/tobagin/rookery/internal/gitstore"
+	"github.com/tobagin/rookery/internal/gpu"
 	"github.com/tobagin/rookery/internal/podman"
 	"github.com/tobagin/rookery/internal/quadlet"
 	"github.com/tobagin/rookery/internal/systemd"
@@ -40,6 +42,9 @@ type Area struct {
 	// Dirs is the Quadlet search path; Dirs[0] is primary — new units are
 	// created there, and units found elsewhere are read-only.
 	Dirs []string
+	// Git, when set, records every save/delete in the primary dir's
+	// repository and serves history/rollback.
+	Git *gitstore.Store
 }
 
 // Options configures a Server; zero-value fields get safe defaults.
@@ -51,6 +56,8 @@ type Options struct {
 	Version  string
 	Password string      // empty disables authentication
 	SELinux  func() bool // nil -> detect on the host
+	// GPUs enumerates host GPUs; nil -> gpu.Detect. Injectable for tests.
+	GPUs func(ctx context.Context) []gpu.Device
 }
 
 // Server routes API and UI requests.
@@ -62,6 +69,7 @@ type Server struct {
 	version  string
 	password string
 	selinux  func() bool
+	gpus     func(ctx context.Context) []gpu.Device
 	sess     *sessions
 	mux      *http.ServeMux
 }
@@ -76,6 +84,7 @@ func New(opts Options) *Server {
 		version:  opts.Version,
 		password: opts.Password,
 		selinux:  opts.SELinux,
+		gpus:     opts.GPUs,
 		sess:     newSessions(),
 		mux:      http.NewServeMux(),
 	}
@@ -84,6 +93,9 @@ func New(opts Options) *Server {
 	}
 	if s.selinux == nil {
 		s.selinux = quadlet.SELinuxEnforcing
+	}
+	if s.gpus == nil {
+		s.gpus = gpu.Detect
 	}
 	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
@@ -96,8 +108,12 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("DELETE /api/units/{scope}/{name}", s.handleDeleteUnit)
 	s.mux.HandleFunc("POST /api/units/{scope}/{name}/action", s.handleAction)
 	s.mux.HandleFunc("GET /api/units/{scope}/{name}/logs", s.handleLogs)
+	s.mux.HandleFunc("GET /api/units/{scope}/{name}/history", s.handleHistory)
+	s.mux.HandleFunc("GET /api/units/{scope}/{name}/history/{commit}", s.handleHistoryShow)
+	s.mux.HandleFunc("POST /api/units/{scope}/{name}/rollback", s.handleRollback)
 	s.mux.HandleFunc("POST /api/validate", s.handleValidate)
 	s.mux.HandleFunc("GET /api/host", s.handleHost)
+	s.mux.HandleFunc("GET /api/gpus", s.handleGPUs)
 	s.mux.Handle("GET /", http.FileServerFS(web.Files))
 	return s
 }

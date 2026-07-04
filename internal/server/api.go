@@ -19,21 +19,22 @@ import (
 // unitJSON is one unit as the API reports it: the file on disk plus live
 // systemd state.
 type unitJSON struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Scope       string `json:"scope"`
-	Service     string `json:"service"`
-	Path        string `json:"path"`
-	ReadOnly    bool   `json:"readOnly"`
-	Description string `json:"description,omitempty"`
-	Image       string `json:"image,omitempty"`
-	Load        string `json:"load"`
-	Active      string `json:"active"`
-	Sub         string `json:"sub"`
-	UnitFile    string `json:"unitFile"`
-	Result      string `json:"result,omitempty"`
-	ExitCode    int    `json:"exitCode"`
-	Restarts    int    `json:"restarts"`
+	Name        string   `json:"name"`
+	Kind        string   `json:"kind"`
+	Scope       string   `json:"scope"`
+	Service     string   `json:"service"`
+	Path        string   `json:"path"`
+	ReadOnly    bool     `json:"readOnly"`
+	Description string   `json:"description,omitempty"`
+	Image       string   `json:"image,omitempty"`
+	Load        string   `json:"load"`
+	Active      string   `json:"active"`
+	Sub         string   `json:"sub"`
+	UnitFile    string   `json:"unitFile"`
+	Result      string   `json:"result,omitempty"`
+	ExitCode    int      `json:"exitCode"`
+	Restarts    int      `json:"restarts"`
+	GPUs        []string `json:"gpus,omitempty"`
 }
 
 func (u *unitJSON) fillStatus(st systemd.UnitStatus) {
@@ -78,6 +79,7 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 				if f, err := quadlet.Parse(data); err == nil {
 					uj.Description, _ = f.Get("Unit", "Description")
 					uj.Image, _ = f.Get(sectionForKind(u.Kind), "Image")
+					uj.GPUs = quadlet.GPURefs(f)
 				}
 			}
 			out = append(out, uj)
@@ -158,6 +160,11 @@ func (s *Server) handleGetUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uj := s.unitJSONFor(r, area, name, path)
+	if f, err := quadlet.Parse(data); err == nil {
+		uj.Description, _ = f.Get("Unit", "Description")
+		uj.Image, _ = f.Get(sectionForKind(quadlet.KindFromName(name)), "Image")
+		uj.GPUs = quadlet.GPURefs(f)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"unit": uj, "content": string(data)})
 }
 
@@ -179,29 +186,18 @@ func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validation, err := s.validate(r.Context(), !area.Scope.IsSystem(), name, req.Content)
+	msg := "rookery: save " + name
+	if !exists {
+		msg = "rookery: create " + name
+	}
+	validation, warnings, saved, err := s.applySave(r, area, name, path, req.Content, req.Restart, msg)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, "validation failed to run: "+err.Error())
-		return
-	}
-	if !validation.Valid {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": validation})
-		return
-	}
-
-	if err := writeFileAtomic(path, []byte(req.Content)); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	warnings := []string{}
-	if err := s.sysd.DaemonReload(r.Context(), area.Scope); err != nil {
-		warnings = append(warnings, "daemon-reload: "+err.Error())
-	}
-	if req.Restart {
-		service, _ := quadlet.ServiceName(name)
-		if err := s.sysd.Restart(r.Context(), area.Scope, service); err != nil {
-			warnings = append(warnings, "restart: "+err.Error())
-		}
+	if !saved {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": validation})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"unit":       s.unitJSONFor(r, area, name, path),
@@ -210,6 +206,42 @@ func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
 		"warnings":   warnings,
 		"hints":      s.selinuxHints(req.Content),
 	})
+}
+
+// applySave is the one write path for unit content: validate with the host
+// generator, write atomically, daemon-reload, optionally restart, and
+// record the change in git when the area tracks history. Invalid content
+// returns saved=false with no side effects; infrastructure trouble after
+// the write (reload, restart, git) degrades to warnings because the file —
+// the source of truth — is already updated.
+func (s *Server) applySave(r *http.Request, area Area, name, path, content string, restart bool, commitMsg string) (validation quadlet.ValidationResult, warnings []string, saved bool, err error) {
+	ctx := r.Context()
+	validation, err = s.validate(ctx, !area.Scope.IsSystem(), name, content)
+	if err != nil {
+		return validation, nil, false, fmt.Errorf("validation failed to run: %w", err)
+	}
+	if !validation.Valid {
+		return validation, nil, false, nil
+	}
+	if err := writeFileAtomic(path, []byte(content)); err != nil {
+		return validation, nil, false, err
+	}
+	warnings = []string{}
+	if err := s.sysd.DaemonReload(ctx, area.Scope); err != nil {
+		warnings = append(warnings, "daemon-reload: "+err.Error())
+	}
+	if restart {
+		service, _ := quadlet.ServiceName(name)
+		if err := s.sysd.Restart(ctx, area.Scope, service); err != nil {
+			warnings = append(warnings, "restart: "+err.Error())
+		}
+	}
+	if area.Git != nil {
+		if err := area.Git.CommitFile(ctx, name, commitMsg); err != nil {
+			warnings = append(warnings, "git: "+err.Error())
+		}
+	}
+	return validation, warnings, true, nil
 }
 
 // selinuxHints flags unlabeled bind mounts, but only on hosts where that
@@ -246,7 +278,99 @@ func (s *Server) handleDeleteUnit(w http.ResponseWriter, r *http.Request) {
 	if err := s.sysd.DaemonReload(r.Context(), area.Scope); err != nil {
 		warnings = append(warnings, "daemon-reload: "+err.Error())
 	}
+	if area.Git != nil {
+		if err := area.Git.CommitFile(r.Context(), name, "rookery: delete "+name); err != nil {
+			warnings = append(warnings, "git: "+err.Error())
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": name, "warnings": warnings})
+}
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	area, name, _, _, ok := s.resolveUnit(w, r)
+	if !ok {
+		return
+	}
+	if area.Git == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "commits": []any{}})
+		return
+	}
+	commits, err := area.Git.History(r.Context(), name, 50)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "commits": commits})
+}
+
+func (s *Server) handleHistoryShow(w http.ResponseWriter, r *http.Request) {
+	area, name, _, _, ok := s.resolveUnit(w, r)
+	if !ok {
+		return
+	}
+	if area.Git == nil {
+		httpError(w, http.StatusNotFound, "git history is not enabled for this scope")
+		return
+	}
+	content, err := area.Git.Show(r.Context(), r.PathValue("commit"), name)
+	if err != nil {
+		httpError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"content": content})
+}
+
+// handleRollback restores a unit to its content at a given commit, through
+// the exact same validate -> write -> reload pipeline as a manual save (so
+// a rollback that no longer validates on today's Podman is rejected, not
+// blindly applied). It works for deleted units too — rollback recreates
+// the file in the primary directory.
+func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
+	area, name, path, exists, ok := s.resolveUnit(w, r)
+	if !ok {
+		return
+	}
+	if area.Git == nil {
+		httpError(w, http.StatusNotFound, "git history is not enabled for this scope")
+		return
+	}
+	if exists && filepath.Dir(path) != area.Dirs[0] {
+		httpError(w, http.StatusConflict, "unit lives in a read-only directory")
+		return
+	}
+	var req struct {
+		Commit  string `json:"commit"`
+		Restart bool   `json:"restart"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	content, err := area.Git.Show(r.Context(), req.Commit, name)
+	if err != nil {
+		httpError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	short := req.Commit
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	validation, warnings, saved, err := s.applySave(r, area, name, path, content, req.Restart,
+		fmt.Sprintf("rookery: rollback %s to %s", name, short))
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !saved {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": validation})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"unit":       s.unitJSONFor(r, area, name, path),
+		"content":    content,
+		"validation": validation,
+		"warnings":   warnings,
+	})
 }
 
 func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
@@ -437,6 +561,10 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 	// Request context cancellation kills journalctl and ends the scan.
+}
+
+func (s *Server) handleGPUs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"devices": s.gpus(r.Context())})
 }
 
 func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {

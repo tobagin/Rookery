@@ -13,6 +13,31 @@ func SELinuxEnforcing() bool {
 	return err == nil && strings.TrimSpace(string(data)) == "1"
 }
 
+// GPURefs lists the GPU attachments a parsed unit declares: CDI devices
+// (nvidia.com/gpu=…), DRI/KFD device nodes, and raw --gpus passthroughs.
+func GPURefs(f *File) []string {
+	var refs []string
+	for _, section := range []string{"Container", "Pod"} {
+		for _, d := range f.All(section, "AddDevice") {
+			dev := strings.TrimPrefix(d, "-") // quadlet allows a leading "-" for optional devices
+			switch {
+			case strings.HasPrefix(dev, "nvidia.com/gpu"),
+				strings.HasPrefix(dev, "amd.com/gpu"),
+				strings.HasPrefix(dev, "/dev/dri"),
+				strings.HasPrefix(dev, "/dev/kfd"),
+				strings.HasPrefix(dev, "/dev/nvidia"):
+				refs = append(refs, dev)
+			}
+		}
+		for _, args := range f.All(section, "PodmanArgs") {
+			if strings.Contains(args, "--gpus") {
+				refs = append(refs, strings.TrimSpace(args))
+			}
+		}
+	}
+	return refs
+}
+
 // VolumeHints inspects a unit file body and flags bind mounts that carry no
 // SELinux relabel option. Callers should only surface these on enforcing
 // hosts. A content that doesn't parse yields no hints — the validator

@@ -93,6 +93,7 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
 }
 .badge-user { color: var(--accent); border-color: var(--accent); }
 .badge-loop { color: var(--pending); border-color: var(--pending); font-weight: 700; }
+.badge-gpu { color: var(--running); border-color: var(--running); }
 
 .btn {
   background: var(--bg-input);
@@ -185,6 +186,43 @@ textarea[readonly] { opacity: .7; }
 .import-unit { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
 .import-unit .imp-name { min-width: 220px; }
 .imp-status .warn { color: var(--failed); }
+
+.gpu-panel {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 12px;
+}
+.gpu-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; flex-wrap: wrap; }
+.gpu-name { font-weight: 600; min-width: 160px; }
+.meter {
+  position: relative;
+  flex: 1;
+  min-width: 140px;
+  max-width: 320px;
+  height: 20px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.meter-fill { position: absolute; inset: 0 auto 0 0; background: rgba(76, 194, 255, .35); }
+.meter-text { position: absolute; inset: 0; font-size: 12px; line-height: 20px; padding-left: 8px; color: var(--fg); }
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+  background: var(--bg-raise);
+}
+.hist-subject { flex: 1; min-width: 160px; }
+.history-row .actions { display: flex; gap: 6px; }
+#hist-view { margin-top: 10px; }
 
 .output {
   background: var(--bg-input);

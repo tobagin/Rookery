@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"os/user"
 	"strings"
 
+	"github.com/tobagin/rookery/internal/gitstore"
 	"github.com/tobagin/rookery/internal/podman"
 	"github.com/tobagin/rookery/internal/quadlet"
 	"github.com/tobagin/rookery/internal/server"
@@ -24,6 +26,8 @@ func main() {
 	listen := flag.String("listen", envOr("ROOKERY_LISTEN", "127.0.0.1:7878"), "address to listen on")
 	users := flag.String("users", envOr("ROOKERY_USERS", ""), "comma-separated users whose rootless quadlets to manage (rootful only)")
 	passwordFile := flag.String("password-file", envOr("ROOKERY_PASSWORD_FILE", ""), "file containing the admin password (or set ROOKERY_PASSWORD)")
+	gitFlag := flag.Bool("git", envOr("ROOKERY_GIT", "") == "1" || envOr("ROOKERY_GIT", "") == "true",
+		"track unit directories in git: commit on save, history, rollback (auto-enabled for dirs that are already repositories)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -44,6 +48,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	attachGit(areas, *gitFlag)
 
 	srv := server.New(server.Options{
 		Areas:    areas,
@@ -103,6 +108,25 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// attachGit opens (or with force, initializes) a git repository in each
+// area's primary directory. Directories that already are repositories get
+// history tracking even without -git; plain directories are left alone
+// unless the flag asks for them.
+func attachGit(areas []server.Area, force bool) {
+	for i := range areas {
+		store, err := gitstore.Open(areas[i].Dirs[0], force)
+		switch {
+		case err == nil:
+			areas[i].Git = store
+			log.Printf("git history enabled for %s (%s)", areas[i].Label, areas[i].Dirs[0])
+		case errors.Is(err, gitstore.ErrNotRepo):
+			// not tracked, not requested — fine
+		default:
+			log.Printf("WARNING: git history unavailable for %s: %v", areas[i].Label, err)
+		}
+	}
 }
 
 // loadPassword prefers an explicit password file over the environment.
