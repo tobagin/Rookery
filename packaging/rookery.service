@@ -1,0 +1,18 @@
+# Bare-binary install (recommended): copy the rookery binary to
+# /usr/local/bin/rookery, this unit to /etc/systemd/system/, then:
+#   systemctl daemon-reload && systemctl enable --now rookery
+
+[Unit]
+Description=Rookery — Quadlet-native web UI for Podman
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/rookery
+Restart=on-failure
+# Rookery binds 127.0.0.1 by default; put a reverse proxy with auth in front
+# before exposing it. Manage users' rootless quadlets with e.g.:
+#   Environment=ROOKERY_USERS=alice,bob
+
+[Install]
+WantedBy=multi-user.target
