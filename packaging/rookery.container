@@ -1,0 +1,27 @@
+# Rookery, dogfooded as a Quadlet. Install to /etc/containers/systemd/
+# (rootful) or ~/.config/containers/systemd/ (rootless), then:
+#   systemctl daemon-reload && systemctl start rookery
+#
+# Note: running in a container limits Rookery to the mounted unit dirs and
+# requires the journal and systemd sockets below. The simpler install is the
+# bare binary with the sibling rookery.service unit.
+
+[Unit]
+Description=Rookery — Quadlet-native web UI for Podman
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=ghcr.io/tobagin/rookery:latest
+PublishPort=127.0.0.1:7878:7878
+Volume=/etc/containers/systemd:/etc/containers/systemd
+Volume=/run/systemd:/run/systemd
+Volume=/var/log/journal:/var/log/journal:ro
+Volume=/run/podman/podman.sock:/run/podman/podman.sock:ro
+SecurityLabelDisable=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target default.target
