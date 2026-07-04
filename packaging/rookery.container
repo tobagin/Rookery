@@ -18,6 +18,10 @@ Environment=ROOKERY_LISTEN=0.0.0.0:7665
 PublishPort=127.0.0.1:7665:7665
 Volume=/etc/containers/systemd:/etc/containers/systemd
 Volume=/run/systemd:/run/systemd
+# systemctl show/list talk to systemd over the D-Bus system bus, not the
+# private socket. Mount the directory, not the socket file, so the mount
+# survives a dbus restart. Not :ro — connecting to a socket needs write.
+Volume=/run/dbus:/run/dbus
 Volume=/var/log/journal:/var/log/journal:ro
 Volume=/run/podman/podman.sock:/run/podman/podman.sock:ro
 # The HOST's quadlet generator, so validation matches the Podman that will
