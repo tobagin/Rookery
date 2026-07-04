@@ -29,7 +29,13 @@ type Device struct {
 // swallowed — a broken nvidia-smi must not hide the AMD card next to it.
 func Detect(ctx context.Context) []Device {
 	devices := detectNvidia(ctx)
-	devices = append(devices, detectDRM("/sys/class/drm")...)
+	haveSMI := len(devices) > 0
+	for _, d := range detectDRM("/sys/class/drm") {
+		if d.Vendor == "nvidia" && haveSMI {
+			continue // nvidia-smi already reported it, with metrics
+		}
+		devices = append(devices, d)
+	}
 	if devices == nil {
 		devices = []Device{}
 	}
@@ -78,8 +84,9 @@ func ParseNvidiaSMI(out string) []Device {
 }
 
 // detectDRM walks /sys/class/drm/card* and reports AMD cards (with amdgpu
-// VRAM/busy metrics) and Intel cards (presence only). NVIDIA is skipped
-// here — nvidia-smi already covered it with better data.
+// VRAM/busy metrics), Intel cards (presence only), and NVIDIA cards
+// (presence only — a card must never vanish just because nvidia-smi is
+// missing; Detect drops these duplicates when nvidia-smi answered).
 func detectDRM(root string) []Device {
 	cards, _ := filepath.Glob(filepath.Join(root, "card[0-9]*"))
 	var devices []Device
@@ -107,6 +114,15 @@ func detectDRM(root string) []Device {
 				Index:          idx,
 				Vendor:         "intel",
 				Name:           "Intel GPU (" + base + ")",
+				MemoryTotalMB:  -1,
+				MemoryUsedMB:   -1,
+				UtilizationPct: -1,
+			})
+		case "0x10de": // NVIDIA — presence only, metrics need nvidia-smi
+			devices = append(devices, Device{
+				Index:          idx,
+				Vendor:         "nvidia",
+				Name:           "NVIDIA GPU (" + base + ")",
 				MemoryTotalMB:  -1,
 				MemoryUsedMB:   -1,
 				UtilizationPct: -1,

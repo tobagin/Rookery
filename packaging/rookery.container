@@ -18,16 +18,19 @@ Environment=ROOKERY_LISTEN=0.0.0.0:7665
 PublishPort=127.0.0.1:7665:7665
 Volume=/etc/containers/systemd:/etc/containers/systemd
 Volume=/run/systemd:/run/systemd
-# systemctl show/list talk to systemd over the D-Bus system bus, not the
-# private socket. Mount the directory, not the socket file, so the mount
-# survives a dbus restart. Not :ro — connecting to a socket needs write.
-Volume=/run/dbus:/run/dbus
+# systemd's private socket (/run/systemd/private) rejects clients from
+# another PID namespace, so systemctl only works with the host's.
+PodmanArgs=--pid=host
 Volume=/var/log/journal:/var/log/journal:ro
 Volume=/run/podman/podman.sock:/run/podman/podman.sock:ro
 # The HOST's quadlet generator, so validation matches the Podman that will
 # actually run the units (Fedora/RHEL path — adjust for other distros).
 # Without it, validation degrades to "unavailable" but everything else works.
 Volume=/usr/libexec/podman/quadlet:/usr/libexec/podman/quadlet:ro
+# NVIDIA GPUs are listed (presence-only) via sysfs; for VRAM/utilization
+# metrics the container needs nvidia-smi, which CDI injects. Uncomment if
+# the host has nvidia-container-toolkit (/etc/cdi/nvidia.yaml):
+#AddDevice=nvidia.com/gpu=all
 SecurityLabelDisable=true
 
 [Service]

@@ -51,15 +51,15 @@ func TestDetectDRM(t *testing.T) {
 		"gpu_busy_percent":    "42",
 	})
 	mk("card1", "0x8086", map[string]string{})
-	mk("card2", "0x10de", map[string]string{}) // NVIDIA: skipped, nvidia-smi owns it
+	mk("card2", "0x10de", map[string]string{}) // NVIDIA: presence even without nvidia-smi
 	// connector entries must be ignored
 	if err := os.MkdirAll(filepath.Join(root, "card0-HDMI-A-1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	devices := detectDRM(root)
-	if len(devices) != 2 {
-		t.Fatalf("got %d devices (%+v), want 2", len(devices), devices)
+	if len(devices) != 3 {
+		t.Fatalf("got %d devices (%+v), want 3", len(devices), devices)
 	}
 	amd := devices[0]
 	if amd.Vendor != "amd" || amd.MemoryTotalMB != 16368 || amd.MemoryUsedMB != 1024 || amd.UtilizationPct != 42 {
@@ -67,5 +67,8 @@ func TestDetectDRM(t *testing.T) {
 	}
 	if devices[1].Vendor != "intel" || devices[1].MemoryTotalMB != -1 {
 		t.Errorf("intel = %+v", devices[1])
+	}
+	if devices[2].Vendor != "nvidia" || devices[2].MemoryTotalMB != -1 || devices[2].UtilizationPct != -1 {
+		t.Errorf("nvidia fallback = %+v", devices[2])
 	}
 }
