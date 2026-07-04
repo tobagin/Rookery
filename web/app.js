@@ -65,6 +65,38 @@ function toast(msg, isError) {
   setTimeout(() => t.remove(), 5000);
 }
 
+/* ---------- diff ---------- */
+
+// lineDiff returns [op, line] pairs (op: " ", "-", "+") via LCS; unit files
+// are small, so the quadratic table is fine.
+function lineDiff(before, after) {
+  const A = before.split("\n"), B = after.split("\n");
+  const m = A.length, n = B.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (A[i] === B[j]) { out.push([" ", A[i]]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push(["-", A[i]]); i++; }
+    else { out.push(["+", B[j]]); j++; }
+  }
+  while (i < m) { out.push(["-", A[i]]); i++; }
+  while (j < n) { out.push(["+", B[j]]); j++; }
+  return out;
+}
+
+function diffHTML(before, after) {
+  return `<pre class="output diff">${lineDiff(before, after).map(([op, line]) => {
+    const cls = op === "+" ? "diff-add" : op === "-" ? "diff-del" : "diff-ctx";
+    return `<span class="${cls}">${esc(op)} ${esc(line)}</span>`;
+  }).join("\n")}</pre>`;
+}
+
 /* ---------- syntax highlighting ----------
    A <pre> with highlighted markup sits behind a transparent-text textarea
    with identical metrics; input and scroll keep them in sync. */
@@ -333,7 +365,9 @@ async function renderUnit(scope, name) {
     } catch (e) { toast(e.message, true); }
   });
 
-  document.getElementById("btn-save").addEventListener("click", async () => {
+  let savedContent = content;
+
+  async function doSave() {
     try {
       const { status, body } = await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`, {
         method: "PUT",
@@ -341,9 +375,28 @@ async function renderUnit(scope, name) {
       });
       $validation.innerHTML = validationHTML(body.validation, body.hints);
       if (status === 422) { toast("rejected by validator", true); return; }
+      savedContent = $editor.value;
       (body.warnings || []).forEach(warning => toast(warning, true));
       toast(`saved ${name} + daemon-reload`);
     } catch (e) { toast(e.message, true); }
+  }
+
+  // The PRD save flow: show what will change on disk, then
+  // write -> daemon-reload (-> restart).
+  document.getElementById("btn-save").addEventListener("click", () => {
+    if ($editor.value === savedContent) {
+      toast("no changes to save");
+      return;
+    }
+    $validation.innerHTML = `
+      <h2>Review changes</h2>
+      ${diffHTML(savedContent, $editor.value)}
+      <div class="toolbar">
+        <button class="btn btn-accent" id="btn-confirm-save">Confirm save + reload</button>
+        <button class="btn" id="btn-cancel-save">Cancel</button>
+      </div>`;
+    document.getElementById("btn-confirm-save").addEventListener("click", doSave);
+    document.getElementById("btn-cancel-save").addEventListener("click", () => { $validation.innerHTML = ""; });
   });
 
   startLogs(scope, name);

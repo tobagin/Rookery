@@ -23,11 +23,11 @@ What works today:
 - **Dashboard** — all Quadlet units grouped by state (failed / running /
   stopped), host metrics strip, Podman version and container counts,
   restart-loop (`↻N`) and exit-code surfacing.
-- **Editor** — syntax-highlighted unit-file editing in the browser; every
-  save is validated with the host's `podman-system-generator --dryrun`
-  first, then written atomically and followed by `daemon-reload`
-  (+ optional restart). On SELinux-enforcing hosts, unlabeled bind mounts
-  get a `:Z`/`:z` hint before they bite.
+- **Editor** — syntax-highlighted unit-file editing in the browser with a
+  diff preview before every save; the confirmed content is validated with
+  the host's `podman-system-generator --dryrun`, written atomically, and
+  followed by `daemon-reload` (+ optional restart). On SELinux-enforcing
+  hosts, unlabeled bind mounts get a `:Z`/`:z` hint before they bite.
 - **Importer** — convert `podman run` commands and compose files into
   Quadlet units, or import an existing container's configuration via the
   Podman API; everything the converter has to guess about becomes an

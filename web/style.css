@@ -198,6 +198,9 @@ textarea[readonly] { opacity: .7; }
 }
 .output.ok { border-color: var(--running); }
 .output.err { border-color: var(--failed); }
+.diff .diff-add { color: var(--running); }
+.diff .diff-del { color: var(--failed); }
+.diff .diff-ctx { color: var(--muted); }
 .logs { height: 320px; overflow-y: auto; }
 
 .banner { border-radius: 10px; padding: 10px 14px; }
