@@ -73,7 +73,7 @@ lose nothing — the files on disk *are* the state.
 ```sh
 git clone https://github.com/tobagin/rookery && cd rookery
 make build          # or: go build ./cmd/rookery
-./rookery           # → http://127.0.0.1:7878
+./rookery           # → http://127.0.0.1:7665
 ```
 
 Run it rootless to manage your own `~/.config/containers/systemd/`, or
@@ -88,7 +88,7 @@ manage alice's rootless units).
 
 | Flag | Env | Default | Meaning |
 |---|---|---|---|
-| `-listen` | `ROOKERY_LISTEN` | `127.0.0.1:7878` | listen address |
+| `-listen` | `ROOKERY_LISTEN` | `127.0.0.1:7665` | listen address ("ROOK" on a phone keypad) |
 | `-users` | `ROOKERY_USERS` | — | extra users to manage (rootful only) |
 | `-password-file` | `ROOKERY_PASSWORD_FILE` | — | admin password file (or set `ROOKERY_PASSWORD`) |
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |

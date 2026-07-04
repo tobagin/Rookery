@@ -26,7 +26,8 @@ import (
 var version = "dev"
 
 func main() {
-	listen := flag.String("listen", envOr("ROOKERY_LISTEN", "127.0.0.1:7878"), "address to listen on")
+	// 7665 spells ROOK on a phone keypad; 7878 collided with Radarr.
+	listen := flag.String("listen", envOr("ROOKERY_LISTEN", "127.0.0.1:7665"), "address to listen on")
 	users := flag.String("users", envOr("ROOKERY_USERS", ""), "comma-separated users whose rootless quadlets to manage (rootful only)")
 	passwordFile := flag.String("password-file", envOr("ROOKERY_PASSWORD_FILE", ""), "file containing the admin password (or set ROOKERY_PASSWORD)")
 	gitFlag := flag.Bool("git", envOr("ROOKERY_GIT", "") == "1" || envOr("ROOKERY_GIT", "") == "true",
