@@ -17,6 +17,9 @@ Image=ghcr.io/tobagin/rookery:latest
 Environment=ROOKERY_LISTEN=0.0.0.0:7665
 PublishPort=127.0.0.1:7665:7665
 Volume=/etc/containers/systemd:/etc/containers/systemd
+# Rookery's own files: the account store (users.json) from the first-run
+# setup must survive container replacement.
+Volume=/etc/rookery:/etc/rookery
 Volume=/run/systemd:/run/systemd
 # systemd's private socket (/run/systemd/private) rejects clients from
 # another PID namespace, so systemctl only works with the host's.

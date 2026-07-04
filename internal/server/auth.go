@@ -12,27 +12,42 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tobagin/rookery/internal/userstore"
 )
 
 const (
-	sessionCookie = "rookery_session"
-	shareCookie   = "rookery_share"
-	sessionTTL    = 7 * 24 * time.Hour
-	shareTTL      = 7 * 24 * time.Hour
+	sessionCookie     = "rookery_session"
+	shareCookie       = "rookery_share"
+	defaultSessionTTL = 24 * time.Hour
+	shareTTL          = 7 * 24 * time.Hour
 )
 
+// session is one logged-in browser.
+type session struct {
+	user   string
+	role   string
+	expiry time.Time
+}
+
 // sessions is an in-memory token store — deliberate: restarting Rookery
-// logs everyone out and leaves nothing on disk.
+// logs everyone out and leaves nothing on disk. Expiry is sliding: every
+// authenticated request pushes it out by the TTL, so "session timeout"
+// means idle timeout.
 type sessions struct {
 	mu     sync.Mutex
-	tokens map[string]time.Time // token -> expiry
+	tokens map[string]*session
+	ttl    time.Duration
 }
 
-func newSessions() *sessions {
-	return &sessions{tokens: map[string]time.Time{}}
+func newSessions(ttl time.Duration) *sessions {
+	if ttl <= 0 {
+		ttl = defaultSessionTTL
+	}
+	return &sessions{tokens: map[string]*session{}, ttl: ttl}
 }
 
-func (s *sessions) create() string {
+func (s *sessions) create(user, role string) string {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		panic(err) // crypto/rand failure is not a recoverable state
@@ -40,20 +55,29 @@ func (s *sessions) create() string {
 	token := hex.EncodeToString(buf)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for t, exp := range s.tokens { // lazy cleanup
-		if time.Now().After(exp) {
+	for t, sess := range s.tokens { // lazy cleanup
+		if time.Now().After(sess.expiry) {
 			delete(s.tokens, t)
 		}
 	}
-	s.tokens[token] = time.Now().Add(sessionTTL)
+	s.tokens[token] = &session{user: user, role: role, expiry: time.Now().Add(s.ttl)}
 	return token
 }
 
-func (s *sessions) valid(token string) bool {
+// get returns the live session for token and slides its expiry.
+func (s *sessions) get(token string) (*session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp, ok := s.tokens[token]
-	return ok && time.Now().Before(exp)
+	sess, ok := s.tokens[token]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(sess.expiry) {
+		delete(s.tokens, token)
+		return nil, false
+	}
+	sess.expiry = time.Now().Add(s.ttl)
+	return sess, true
 }
 
 func (s *sessions) revoke(token string) {
@@ -62,36 +86,73 @@ func (s *sessions) revoke(token string) {
 	delete(s.tokens, token)
 }
 
+/* ---------- access decisions ---------- */
+
+// authConfigured reports whether any credential exists: a legacy -password
+// or at least one account in the user store.
+func (s *Server) authConfigured() bool {
+	return s.password != "" || (s.users != nil && !s.users.Empty())
+}
+
+// setupNeeded reports whether the first-run wizard should run: a user store
+// is wired up, has no accounts, and no legacy password covers for it.
+func (s *Server) setupNeeded() bool {
+	return s.users != nil && s.users.Empty() && s.password == ""
+}
+
 // authRequired reports whether the request must carry a valid session.
-// Static assets and the auth endpoints themselves stay reachable so the
-// login page can render.
+// Static assets and the auth/setup endpoints stay reachable so the login
+// and wizard pages can render.
 func (s *Server) authRequired(r *http.Request) bool {
-	if s.password == "" {
+	if !s.authConfigured() {
 		return false
 	}
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
 		return false
 	}
 	switch r.URL.Path {
-	case "/api/login", "/api/auth":
+	case "/api/login", "/api/auth", "/api/setup":
 		return false
 	}
 	return true
 }
 
-func (s *Server) authenticated(r *http.Request) bool {
+// session returns the request's live session, if any.
+func (s *Server) session(r *http.Request) (*session, bool) {
 	c, err := r.Cookie(sessionCookie)
-	return err == nil && s.sess.valid(c.Value)
+	if err != nil {
+		return nil, false
+	}
+	return s.sess.get(c.Value)
+}
+
+func (s *Server) authenticated(r *http.Request) bool {
+	_, ok := s.session(r)
+	return ok
+}
+
+// readOnlyRequest reports whether a GET-only principal (viewer role or
+// share link) may perform this request.
+func readOnlyAllowed(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	// No secrets metadata and no account list for read-only principals.
+	return !strings.HasPrefix(r.URL.Path, "/api/secrets") && !strings.HasPrefix(r.URL.Path, "/api/users")
 }
 
 /* ---------- read-only share links ----------
-   A share token is expiry.HMAC(expiry), keyed off the admin password: it
-   survives restarts with no state on disk, and changing the password
-   revokes every outstanding link. Share access is enforced GET-only in
-   ServeHTTP — the UI hiding buttons is cosmetics, this is the boundary. */
+   A share token is expiry.HMAC(expiry), keyed off the credential material:
+   it survives restarts with no state of its own, and changing any password
+   revokes every outstanding link. Enforcement lives in ServeHTTP — the UI
+   hiding buttons is cosmetics, this is the boundary. */
 
 func (s *Server) shareKey() []byte {
-	h := sha256.Sum256([]byte("rookery-share:" + s.password))
+	material := "rookery-share:" + s.password
+	if s.users != nil {
+		material += ":" + s.users.Fingerprint()
+	}
+	h := sha256.Sum256([]byte(material))
 	return h[:]
 }
 
@@ -120,7 +181,7 @@ func (s *Server) shareValid(token string) bool {
 // shareAccess reports whether the request carries a valid share token
 // (query param on first visit, cookie afterwards).
 func (s *Server) shareAccess(r *http.Request) bool {
-	if s.password == "" {
+	if !s.authConfigured() {
 		return false
 	}
 	if tok := r.URL.Query().Get("share"); tok != "" && s.shareValid(tok) {
@@ -131,8 +192,8 @@ func (s *Server) shareAccess(r *http.Request) bool {
 }
 
 func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
-	if s.password == "" {
-		httpError(w, http.StatusBadRequest, "no admin password is set — this instance is already open")
+	if !s.authConfigured() {
+		httpError(w, http.StatusBadRequest, "no credentials are set — this instance is already open")
 		return
 	}
 	token := s.mintShare(time.Now().Add(shareTTL))
@@ -142,45 +203,100 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+/* ---------- endpoints ---------- */
+
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
-	share := s.password != "" && !s.authenticated(r) && s.shareAccess(r)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"required":      s.password != "",
-		"authenticated": s.password == "" || s.authenticated(r) || share,
-		"readOnly":      share,
-	})
+	sess, loggedIn := s.session(r)
+	share := s.authConfigured() && !loggedIn && s.shareAccess(r)
+	resp := map[string]any{
+		"required":      s.authConfigured(),
+		"authenticated": !s.authConfigured() || loggedIn || share,
+		"readOnly":      share || (loggedIn && sess.role == userstore.RoleViewer),
+		"setupNeeded":   s.setupNeeded(),
+	}
+	if loggedIn {
+		resp["username"] = sess.user
+		resp["role"] = sess.role
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if s.password == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
+// handleSetup is the first-run wizard's endpoint: it creates the initial
+// admin account and logs the browser straight in. It only works while no
+// credentials exist at all, so it can never be used to add a backdoor.
+func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusOK, map[string]any{"needed": s.setupNeeded()})
+		return
+	}
+	if !s.setupNeeded() {
+		httpError(w, http.StatusForbidden, "setup has already been completed")
 		return
 	}
 	var req struct {
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	// Compare digests so length differences don't leak timing.
-	got := sha256.Sum256([]byte(req.Password))
-	want := sha256.Sum256([]byte(s.password))
-	if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-		time.Sleep(300 * time.Millisecond) // slow down brute force
-		httpError(w, http.StatusUnauthorized, "wrong password")
+	if err := s.users.Create(req.Username, req.Password, userstore.RoleAdmin); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.setSessionCookie(w, r, s.sess.create(req.Username, userstore.RoleAdmin))
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": req.Username, "role": userstore.RoleAdmin})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.authConfigured() {
+		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	user, role, ok := "", "", false
+	if s.users != nil && !s.users.Empty() {
+		if r, valid := s.users.Verify(req.Username, req.Password); valid {
+			user, role, ok = req.Username, r, true
+		}
+	}
+	if !ok && s.password != "" {
+		// Legacy single-password mode (ROOKERY_PASSWORD): any/empty
+		// username, compared via digests so length doesn't leak timing.
+		got := sha256.Sum256([]byte(req.Password))
+		want := sha256.Sum256([]byte(s.password))
+		if subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
+			user, role, ok = "admin", userstore.RoleAdmin, true
+		}
+	}
+	if !ok {
+		time.Sleep(300 * time.Millisecond) // slow down brute force
+		httpError(w, http.StatusUnauthorized, "wrong username or password")
+		return
+	}
+	s.setSessionCookie(w, r, s.sess.create(user, role))
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": user, "role": role})
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
-		Value:    s.sess.create(),
+		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   r.TLS != nil,
-		MaxAge:   int(sessionTTL.Seconds()),
+		MaxAge:   int(s.sess.ttl.Seconds()),
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

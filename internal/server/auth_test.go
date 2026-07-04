@@ -1,13 +1,16 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/tobagin/rookery/internal/userstore"
 )
 
 func timeNowPlusShareTTL() time.Time { return time.Now().Add(shareTTL) }
@@ -146,6 +149,146 @@ func TestShareLinks(t *testing.T) {
 	}
 	if !found {
 		t.Error("visiting /?share= did not set the share cookie")
+	}
+}
+
+func newUsersServer(t *testing.T) (*Server, *userstore.Store) {
+	t.Helper()
+	store, err := userstore.Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Options{
+		Areas:    []Area{{Label: "system", Scope: systemd.Scope{}, Dirs: []string{t.TempDir()}}},
+		Systemd:  &fakeSystemd{},
+		Validate: okValidator,
+		Users:    store,
+	})
+	return srv, store
+}
+
+func loginCookie(t *testing.T, srv *Server, user, pass string) string {
+	t.Helper()
+	rec, _ := doJSON(t, srv, "POST", "/api/login", fmt.Sprintf(`{"username":%q,"password":%q}`, user, pass))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login %s: %d %s", user, rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookie {
+			return c.Value
+		}
+	}
+	t.Fatal("no session cookie on login")
+	return ""
+}
+
+func doAs(t *testing.T, srv *Server, cookie, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestSetupWizardFlow(t *testing.T) {
+	srv, _ := newUsersServer(t)
+
+	// Fresh instance: open, and asking for setup.
+	rec, body := doJSON(t, srv, "GET", "/api/auth", "")
+	if rec.Code != http.StatusOK || body["setupNeeded"] != true || body["required"] != false {
+		t.Fatalf("pre-setup auth = %v", body)
+	}
+
+	rec, _ = doJSON(t, srv, "POST", "/api/setup", `{"username":"tobagin","password":"longpassword"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup: %d %s", rec.Code, rec.Body.String())
+	}
+	var setupCookie string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookie {
+			setupCookie = c.Value
+		}
+	}
+	if setupCookie == "" {
+		t.Fatal("setup did not log the browser in")
+	}
+
+	// Auth is now required; the setup session works; setup is one-shot.
+	if rec, _ := doJSON(t, srv, "GET", "/api/units", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("post-setup anonymous access: %d, want 401", rec.Code)
+	}
+	if rec := doAs(t, srv, setupCookie, "GET", "/api/units", ""); rec.Code != http.StatusOK {
+		t.Errorf("setup session: %d, want 200", rec.Code)
+	}
+	if rec, _ := doJSON(t, srv, "POST", "/api/setup", `{"username":"evil","password":"gimmebackdoor"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("second setup: %d, want 403", rec.Code)
+	}
+
+	// Normal login works afterwards.
+	loginCookie(t, srv, "tobagin", "longpassword")
+}
+
+func TestViewerRoleIsReadOnly(t *testing.T) {
+	srv, store := newUsersServer(t)
+	if err := store.Create("boss", "adminpass123", userstore.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create("couch", "viewerpass1", userstore.RoleViewer); err != nil {
+		t.Fatal(err)
+	}
+
+	viewer := loginCookie(t, srv, "couch", "viewerpass1")
+	if rec := doAs(t, srv, viewer, "GET", "/api/units", ""); rec.Code != http.StatusOK {
+		t.Errorf("viewer GET units: %d", rec.Code)
+	}
+	for _, tc := range []struct{ method, path string }{
+		{"POST", "/api/units/system/x.container/action"},
+		{"GET", "/api/secrets"},
+		{"GET", "/api/users"},
+		{"POST", "/api/share"},
+	} {
+		if rec := doAs(t, srv, viewer, tc.method, tc.path, "{}"); rec.Code != http.StatusForbidden {
+			t.Errorf("viewer %s %s: %d, want 403", tc.method, tc.path, rec.Code)
+		}
+	}
+
+	// Admin manages accounts; the last admin is protected.
+	admin := loginCookie(t, srv, "boss", "adminpass123")
+	if rec := doAs(t, srv, admin, "GET", "/api/users", ""); rec.Code != http.StatusOK {
+		t.Errorf("admin list users: %d", rec.Code)
+	}
+	if rec := doAs(t, srv, admin, "DELETE", "/api/users/boss", ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("delete last admin: %d, want 400", rec.Code)
+	}
+	if rec := doAs(t, srv, admin, "DELETE", "/api/users/couch", ""); rec.Code != http.StatusOK {
+		t.Errorf("delete viewer: %d", rec.Code)
+	}
+
+	// Deleting the account changed the store fingerprint: the viewer's old
+	// session still lives (in-memory), but share links minted before are
+	// dead. Also verify password change revokes shares.
+	tokenBefore := srv.mintShare(timeNowPlusShareTTL())
+	if err := store.SetPassword("boss", "newadminpass1"); err != nil {
+		t.Fatal(err)
+	}
+	if srv.shareValid(tokenBefore) {
+		t.Error("share token survived a password change")
+	}
+}
+
+func TestSessionSlidingExpiry(t *testing.T) {
+	s := newSessions(60 * time.Millisecond)
+	tok := s.create("a", "admin")
+	for i := 0; i < 3; i++ {
+		time.Sleep(40 * time.Millisecond)
+		if _, ok := s.get(tok); !ok {
+			t.Fatalf("session expired despite activity (round %d)", i)
+		}
+	}
+	time.Sleep(90 * time.Millisecond)
+	if _, ok := s.get(tok); ok {
+		t.Error("idle session did not expire")
 	}
 }
 

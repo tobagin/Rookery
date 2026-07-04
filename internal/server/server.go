@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/tobagin/rookery/internal/gitstore"
 	"github.com/tobagin/rookery/internal/gpu"
@@ -17,6 +17,7 @@ import (
 	"github.com/tobagin/rookery/internal/registry"
 	"github.com/tobagin/rookery/internal/rhost"
 	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/tobagin/rookery/internal/userstore"
 	"github.com/tobagin/rookery/web"
 )
 
@@ -72,8 +73,14 @@ type Options struct {
 	Validate ValidateFunc
 	Podman   Podman // nil disables the Podman panel, import, and updates
 	Version  string
-	Password string      // empty disables authentication
-	SELinux  func() bool // nil -> detect on the host
+	Password string // legacy single admin password; empty defers to Users
+	// Users is the on-disk account store; an empty store (plus no legacy
+	// Password) triggers the first-run setup wizard. nil disables accounts.
+	Users *userstore.Store
+	// SessionTTL is the idle timeout for login sessions (sliding); zero
+	// means 24h.
+	SessionTTL time.Duration
+	SELinux    func() bool // nil -> detect on the host
 	// GPUs enumerates host GPUs; nil -> gpu.Detect. Injectable for tests.
 	GPUs func(ctx context.Context) []gpu.Device
 	// ResolveDigest fetches an image tag's current registry digest;
@@ -99,6 +106,7 @@ type Server struct {
 	remoteGPUs    func(ctx context.Context, target string) []gpu.Device
 	version       string
 	password      string
+	users         *userstore.Store
 	selinux       func() bool
 	gpus          func(ctx context.Context) []gpu.Device
 	sess          *sessions
@@ -114,13 +122,14 @@ func New(opts Options) *Server {
 		pod:           opts.Podman,
 		version:       opts.Version,
 		password:      opts.Password,
+		users:         opts.Users,
 		selinux:       opts.SELinux,
 		gpus:          opts.GPUs,
 		resolve:       opts.ResolveDigest,
 		remoteDigests: opts.RemoteDigests,
 		remotePull:    opts.RemotePull,
 		remoteGPUs:    opts.RemoteGPUs,
-		sess:          newSessions(),
+		sess:          newSessions(opts.SessionTTL),
 		mux:           http.NewServeMux(),
 	}
 	if s.validate == nil {
@@ -154,6 +163,12 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
 	s.mux.HandleFunc("POST /api/share", s.handleShare)
+	s.mux.HandleFunc("GET /api/setup", s.handleSetup)
+	s.mux.HandleFunc("POST /api/setup", s.handleSetup)
+	s.mux.HandleFunc("GET /api/users", s.handleListUsers)
+	s.mux.HandleFunc("POST /api/users", s.handleCreateUser)
+	s.mux.HandleFunc("DELETE /api/users/{name}", s.handleDeleteUser)
+	s.mux.HandleFunc("POST /api/users/{name}/password", s.handleSetUserPassword)
 	s.mux.HandleFunc("POST /api/convert", s.handleConvert)
 	s.mux.HandleFunc("GET /api/import/containers", s.handleImportContainers)
 	s.mux.HandleFunc("GET /api/units", s.handleListUnits)
@@ -182,20 +197,29 @@ func New(opts Options) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A share link's first visit carries ?share=; persist it as a cookie so
 	// the SPA's API calls inherit the access.
-	if tok := r.URL.Query().Get("share"); tok != "" && s.password != "" && s.shareValid(tok) {
+	if tok := r.URL.Query().Get("share"); tok != "" && s.authConfigured() && s.shareValid(tok) {
 		http.SetCookie(w, &http.Cookie{
 			Name: shareCookie, Value: tok, Path: "/",
 			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil,
 		})
 	}
-	if s.authRequired(r) && !s.authenticated(r) {
-		if !s.shareAccess(r) {
+	if s.authRequired(r) {
+		sess, loggedIn := s.session(r)
+		switch {
+		case loggedIn && sess.role == userstore.RoleAdmin:
+			// full access
+		case loggedIn: // viewer account
+			if !readOnlyAllowed(r) {
+				httpError(w, http.StatusForbidden, "your account is view-only")
+				return
+			}
+		case s.shareAccess(r):
+			if !readOnlyAllowed(r) {
+				httpError(w, http.StatusForbidden, "this is a read-only share link")
+				return
+			}
+		default:
 			httpError(w, http.StatusUnauthorized, "authentication required")
-			return
-		}
-		// GET-only, and no secrets metadata for viewers.
-		if r.Method != http.MethodGet || strings.HasPrefix(r.URL.Path, "/api/secrets") {
-			httpError(w, http.StatusForbidden, "this is a read-only share link")
 			return
 		}
 	}

@@ -10,7 +10,7 @@ const $hoststrip = document.getElementById("hoststrip");
 
 let refreshTimer = null;
 let logSource = null;
-let authState = { required: false, authenticated: true, readOnly: false };
+let authState = { required: false, authenticated: true, readOnly: false, setupNeeded: false, username: "", role: "" };
 // Last "check image updates" result, keyed by scope/name; survives the
 // dashboard's periodic re-render.
 let updateInfo = {};
@@ -149,8 +149,69 @@ function enhanceEditor($ta) {
 async function checkAuth() {
   try {
     const { body } = await api("/api/auth");
-    authState = { required: !!body.required, authenticated: !!body.authenticated, readOnly: !!body.readOnly };
+    authState = {
+      required: !!body.required,
+      authenticated: !!body.authenticated,
+      readOnly: !!body.readOnly,
+      setupNeeded: !!body.setupNeeded,
+      username: body.username || "",
+      role: body.role || "",
+    };
   } catch { /* open mode if unreachable; the next call will re-ask */ }
+}
+
+/* ---------- first-run setup wizard ---------- */
+
+function renderSetup() {
+  stopStreams();
+  $hoststrip.innerHTML = "";
+  $app.innerHTML = `
+    <div class="login">
+      <div class="login-card">
+        <h1>🦭 Welcome to Rookery</h1>
+        <p class="muted">First things first: create the admin account. It's stored on this
+        host (hashed, never plaintext) — no cloud, no telemetry.</p>
+        <form id="setup-form">
+          <div class="toolbar" style="flex-direction:column; align-items:stretch">
+            <input id="setup-user" class="input" placeholder="Username" autocomplete="username" value="admin">
+            <input type="password" id="setup-pass" class="input" placeholder="Password (min 8 characters)" autocomplete="new-password">
+            <input type="password" id="setup-pass2" class="input" placeholder="Repeat password" autocomplete="new-password">
+            <button class="btn btn-accent">Create admin account</button>
+          </div>
+        </form>
+        <p id="setup-err" class="banner banner-error" hidden></p>
+        <p class="muted"><a href="#" id="setup-skip">Skip for now</a> — Rookery stays open to
+        anyone who can reach this port until an account exists.</p>
+      </div>
+    </div>`;
+  const $err = document.getElementById("setup-err");
+  document.getElementById("setup-form").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const pass = document.getElementById("setup-pass").value;
+    if (pass !== document.getElementById("setup-pass2").value) {
+      $err.hidden = false;
+      $err.textContent = "passwords do not match";
+      return;
+    }
+    try {
+      await api("/api/setup", {
+        method: "POST",
+        body: JSON.stringify({ username: document.getElementById("setup-user").value.trim(), password: pass }),
+      });
+      toast("admin account created — you are signed in");
+      await checkAuth();
+      render();
+    } catch (e) {
+      $err.hidden = false;
+      $err.textContent = e.message;
+    }
+  });
+  document.getElementById("setup-skip").addEventListener("click", ev => {
+    ev.preventDefault();
+    sessionStorage.setItem("rookery-setup-skip", "1");
+    render();
+  });
+  document.getElementById("setup-pass").focus();
 }
 
 function renderLogin() {
@@ -161,9 +222,12 @@ function renderLogin() {
       <div class="login-card">
         <h1>🦭 Rookery</h1>
         <p class="muted">Sign in to manage this host's Quadlets.</p>
-        <form id="login-form" class="toolbar">
-          <input type="password" id="login-pass" class="input" placeholder="Admin password" autocomplete="current-password">
-          <button class="btn btn-accent">Sign in</button>
+        <form id="login-form">
+          <div class="toolbar" style="flex-direction:column; align-items:stretch">
+            <input id="login-user" class="input" placeholder="Username" autocomplete="username">
+            <input type="password" id="login-pass" class="input" placeholder="Password" autocomplete="current-password">
+            <button class="btn btn-accent">Sign in</button>
+          </div>
         </form>
         <p id="login-err" class="banner banner-error" hidden></p>
       </div>
@@ -174,22 +238,102 @@ function renderLogin() {
     try {
       await api("/api/login", {
         method: "POST",
-        body: JSON.stringify({ password: document.getElementById("login-pass").value }),
+        body: JSON.stringify({
+          username: document.getElementById("login-user").value.trim(),
+          password: document.getElementById("login-pass").value,
+        }),
       });
-      authState.authenticated = true;
+      await checkAuth();
       render();
     } catch (e) {
       $err.hidden = false;
       $err.textContent = e.message;
     }
   });
-  document.getElementById("login-pass").focus();
+  document.getElementById("login-user").focus();
 }
 
 async function logout() {
   try { await api("/api/logout", { method: "POST" }); } catch { /* session may be gone already */ }
-  authState.authenticated = false;
+  authState = { ...authState, authenticated: false, readOnly: false, username: "", role: "" };
   renderLogin();
+}
+
+/* ---------- user management ---------- */
+
+async function renderUsers() {
+  $app.innerHTML = `
+    <div class="detail-head"><a class="btn btn-sm" href="#/">←</a><h1>Users</h1></div>
+    <p class="muted">Admins have full control; viewers get the same read-only dashboard as a
+    share link, but with their own login and no expiry.</p>
+    <div id="user-list"><p class="muted">loading…</p></div>
+    <section>
+      <h2>Add user</h2>
+      <div class="toolbar">
+        <input id="nu-name" class="input" placeholder="username" autocomplete="off">
+        <input id="nu-pass" class="input" type="password" placeholder="password (min 8 chars)" autocomplete="new-password">
+        <select id="nu-role" class="input"><option value="viewer">viewer</option><option value="admin">admin</option></select>
+        <button class="btn btn-accent" id="nu-create">Add</button>
+      </div>
+    </section>`;
+
+  const $list = document.getElementById("user-list");
+  async function loadList() {
+    try {
+      const { body } = await api("/api/users");
+      const rows = body.users || [];
+      $list.innerHTML = rows.map(u => `
+        <div class="history-row">
+          <span class="mono">${esc(u.name)}${u.name === body.me ? ` <span class="muted">(you)</span>` : ""}</span>
+          <span class="badge ${u.role === "admin" ? "badge-user" : ""}">${esc(u.role)}</span>
+          <span class="hist-subject"></span>
+          <span class="actions">
+            <button class="btn btn-sm u-pass" data-name="${esc(u.name)}">reset password</button>
+            <button class="btn btn-sm btn-danger u-del" data-name="${esc(u.name)}">delete</button>
+          </span>
+        </div>`).join("");
+      $list.querySelectorAll(".u-del").forEach(btn => btn.addEventListener("click", async () => {
+        const name = btn.dataset.name;
+        if (!confirm(`Delete user ${name}?`)) return;
+        try {
+          await api(`/api/users/${encodeURIComponent(name)}`, { method: "DELETE" });
+          toast(`deleted ${name} — outstanding share links are revoked`);
+        } catch (e) { toast(e.message, true); }
+        loadList();
+      }));
+      $list.querySelectorAll(".u-pass").forEach(btn => btn.addEventListener("click", async () => {
+        const name = btn.dataset.name;
+        const pass = prompt(`New password for ${name} (min 8 characters):`);
+        if (!pass) return;
+        try {
+          await api(`/api/users/${encodeURIComponent(name)}/password`, {
+            method: "POST", body: JSON.stringify({ password: pass }),
+          });
+          toast(`password updated for ${name} — outstanding share links are revoked`);
+        } catch (e) { toast(e.message, true); }
+      }));
+    } catch (e) {
+      $list.innerHTML = `<p class="banner banner-warn">${esc(e.message)}</p>`;
+    }
+  }
+  await loadList();
+
+  document.getElementById("nu-create").addEventListener("click", async () => {
+    try {
+      await api("/api/users", {
+        method: "POST",
+        body: JSON.stringify({
+          username: document.getElementById("nu-name").value.trim(),
+          password: document.getElementById("nu-pass").value,
+          role: document.getElementById("nu-role").value,
+        }),
+      });
+      toast("user created");
+      document.getElementById("nu-name").value = "";
+      document.getElementById("nu-pass").value = "";
+      loadList();
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 /* ---------- host strip ---------- */
@@ -204,8 +348,11 @@ async function renderHostStrip() {
     if (body.selinuxEnforcing) bits.push(`<span class="chip" title="SELinux is enforcing; Rookery will hint about unlabeled bind mounts">selinux</span>`);
     if (!body.generatorAvailable) bits.push(`<span class="chip chip-warn" title="podman quadlet generator not found; validation disabled">no validator</span>`);
     if (authState.readOnly) {
-      bits.push(`<span class="chip chip-warn" title="opened via a read-only share link">read-only</span>`);
+      bits.push(`<span class="chip chip-warn" title="read-only access">read-only${authState.username ? " · " + esc(authState.username) : ""}</span>`);
+      if (authState.username) bits.push(`<a class="chip" href="#" id="btn-logout" title="sign out">logout</a>`);
     } else if (authState.required && authState.authenticated) {
+      if (authState.username) bits.push(`<span class="chip" title="signed in as ${esc(authState.username)}">👤 ${esc(authState.username)}</span>`);
+      bits.push(`<a class="chip" href="#/users" title="manage accounts">users</a>`);
       bits.push(`<a class="chip" href="#" id="btn-share" title="copy a 7-day read-only share link">share</a>`);
       bits.push(`<a class="chip" href="#" id="btn-logout" title="sign out">logout</a>`);
     }
@@ -1064,6 +1211,10 @@ async function renderSecrets() {
 
 async function render() {
   stopStreams();
+  if (authState.setupNeeded && !sessionStorage.getItem("rookery-setup-skip")) {
+    renderSetup();
+    return;
+  }
   if (authState.required && !authState.authenticated) {
     renderLogin();
     return;
@@ -1071,8 +1222,9 @@ async function render() {
   document.body.classList.toggle("readonly", authState.readOnly);
   renderHostStrip();
   let hash = location.hash || "#/";
-  if (authState.readOnly && (hash.startsWith("#/new") || hash.startsWith("#/import"))) {
-    hash = "#/"; // mutating views are pointless on a read-only link
+  if (authState.readOnly && (hash.startsWith("#/new") || hash.startsWith("#/import") ||
+      hash.startsWith("#/secrets") || hash.startsWith("#/users"))) {
+    hash = "#/"; // admin views are pointless on a read-only login
   }
   const parts = hash.slice(2).split("/").filter(Boolean).map(decodeURIComponent);
   try {
@@ -1084,6 +1236,8 @@ async function render() {
       await renderImport();
     } else if (parts[0] === "secrets") {
       await renderSecrets();
+    } else if (parts[0] === "users") {
+      await renderUsers();
     } else {
       await renderDashboard();
       refreshTimer = setInterval(() => {

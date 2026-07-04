@@ -23,6 +23,7 @@ import (
 	"github.com/tobagin/rookery/internal/rhost"
 	"github.com/tobagin/rookery/internal/server"
 	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/tobagin/rookery/internal/userstore"
 )
 
 // version is stamped by the build (see Makefile).
@@ -39,6 +40,10 @@ func main() {
 		`comma-separated remote hosts to manage over ssh, as alias=user@host (e.g. "nas=root@nas.local,media=deploy@media.lan")`)
 	alerts := flag.String("alerts", envOr("ROOKERY_ALERTS", ""),
 		`comma-separated failure-alert destinations: ntfy://host/topic, telegram://BOT_TOKEN@CHAT_ID, or an http(s) webhook URL`)
+	dataDir := flag.String("data-dir", envOr("ROOKERY_DATA_DIR", ""),
+		"directory for rookery's own files (users.json); default /etc/rookery rootful, ~/.config/rookery rootless")
+	sessionTTL := flag.Duration("session-ttl", envDurationOr("ROOKERY_SESSION_TTL", 24*time.Hour),
+		"idle timeout for login sessions (sliding)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -51,8 +56,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if password == "" && !isLoopback(*listen) {
-		log.Printf("WARNING: no admin password configured while listening on %s — anyone who can reach this port controls your containers. Set ROOKERY_PASSWORD or -password-file.", *listen)
+	accounts, err := userstore.Open(filepath.Join(resolveDataDir(*dataDir), "users.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if password == "" && accounts.Empty() {
+		if isLoopback(*listen) {
+			log.Printf("no credentials yet — open http://%s to run the first-run setup", *listen)
+		} else {
+			log.Printf("WARNING: no credentials configured while listening on %s — anyone who can reach this port controls your containers until the first-run setup completes.", *listen)
+		}
 	}
 
 	areas, err := detectAreas(*users)
@@ -67,11 +80,13 @@ func main() {
 	attachGit(areas, *gitFlag)
 
 	srv := server.New(server.Options{
-		Areas:    areas,
-		Systemd:  systemd.NewManager(),
-		Podman:   podman.New(podman.SocketPath()),
-		Version:  version,
-		Password: password,
+		Areas:      areas,
+		Systemd:    systemd.NewManager(),
+		Podman:     podman.New(podman.SocketPath()),
+		Version:    version,
+		Password:   password,
+		Users:      accounts,
+		SessionTTL: *sessionTTL,
 	})
 
 	if *alerts != "" {
@@ -179,6 +194,30 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envDurationOr(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		log.Printf("WARNING: %s=%q is not a duration; using %s", key, os.Getenv(key), fallback)
+	}
+	return fallback
+}
+
+// resolveDataDir picks where rookery's own files (users.json) live.
+func resolveDataDir(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if os.Geteuid() == 0 {
+		return "/etc/rookery"
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(dir, "rookery")
+	}
+	return ".rookery"
 }
 
 // remoteAreas probes each alias=user@host entry over ssh and builds an

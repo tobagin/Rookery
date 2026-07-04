@@ -72,9 +72,13 @@ lose nothing — the files on disk *are* the state.
 - **Failure alerts** — `-alerts ntfy://ntfy.sh/topic` (or
   `telegram://BOT_TOKEN@CHAT_ID`, or any JSON webhook) notifies when a unit
   enters or recovers from `failed`, with exit code and restart count.
+- **Accounts & roles** — a first-run wizard creates the admin account
+  (PBKDF2-hashed in a plain JSON file, no database); admins can add more
+  admins or **viewer** accounts that get a read-only dashboard. Sessions are
+  HttpOnly cookies with a sliding idle timeout (`-session-ttl`, default 24h).
 - **Read-only share links** — one click mints a 7-day link for a dashboard
-  view without the admin password: enforced GET-only on the server, no
-  secrets, no actions. Changing the password revokes all links.
+  view without a login: enforced GET-only on the server, no secrets, no
+  actions. Changing any password revokes all links.
 - **Secrets** — list `podman secret`s with the units that reference them,
   create and delete from the browser (delete refuses while referenced);
   the editor inserts `Secret=` lines from a picker. Values are write-only.
@@ -94,9 +98,11 @@ Run it rootless to manage your own `~/.config/containers/systemd/`, or
 rootful to manage `/etc/containers/systemd/` (add `-users alice` to also
 manage alice's rootless units).
 
-> ⚠️ Set a password (`ROOKERY_PASSWORD` or `-password-file`) before exposing
-> Rookery beyond `127.0.0.1`, and put TLS in front of it (reverse proxy) —
-> the built-in server speaks plain HTTP.
+> The first visit runs a setup wizard that creates the admin account —
+> complete it **before** exposing Rookery beyond `127.0.0.1`, and put TLS in
+> front of it (reverse proxy) — the built-in server speaks plain HTTP.
+> (`ROOKERY_PASSWORD` / `-password-file` still work as a wizard-free legacy
+> single-admin mode.)
 
 ### Configuration
 
@@ -104,7 +110,9 @@ manage alice's rootless units).
 |---|---|---|---|
 | `-listen` | `ROOKERY_LISTEN` | `127.0.0.1:7665` | listen address ("ROOK" on a phone keypad) |
 | `-users` | `ROOKERY_USERS` | auto-discover | rootless users to manage (rootful only); `none` disables |
-| `-password-file` | `ROOKERY_PASSWORD_FILE` | — | admin password file (or set `ROOKERY_PASSWORD`) |
+| `-password-file` | `ROOKERY_PASSWORD_FILE` | — | legacy single-admin password (or `ROOKERY_PASSWORD`); the wizard is nicer |
+| `-data-dir` | `ROOKERY_DATA_DIR` | `/etc/rookery` (rootful) | where `users.json` lives |
+| `-session-ttl` | `ROOKERY_SESSION_TTL` | `24h` | idle timeout for login sessions (sliding) |
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
 | `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...` |
 | `-alerts` | `ROOKERY_ALERTS` | — | failure alerts: `ntfy://host/topic`, `telegram://TOKEN@CHAT`, webhook URL |
@@ -166,7 +174,9 @@ Design rules (from the [PRD](docs/PRD.md)):
 | `GET/POST /api/secrets`, `DELETE /api/secrets/{name}` | podman secrets (write-only values) |
 | `GET /api/images/stale` / `POST /api/images/prune` | dangling-image count/size, prune |
 | `POST /api/share` | mint a 7-day read-only share token |
-| `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth |
+| `GET/POST /api/setup` | first-run wizard: create the initial admin (one-shot) |
+| `GET/POST /api/users`, `DELETE /api/users/{name}`, `POST /api/users/{name}/password` | account management (admin) |
+| `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth (sliding idle timeout) |
 
 `{scope}` is `system`, a username, or a remote-host alias from `-remotes`.
 
@@ -200,7 +210,10 @@ Deliberately not built: `podlet` integration (the native converter covers
 the common cases and warns about the rest; a binary dependency for edge
 cases isn't worth it — open an issue if you hit a real gap).
 
-- **v2**: OIDC / multi-admin auth, systemd credentials alongside podman
+Multi-admin accounts with a viewer role shipped with the first-run wizard;
+what remains of the auth story is external identity.
+
+- **v2**: OIDC / external SSO, systemd credentials alongside podman
   secrets, pod-level log interleaving.
 
 ## License
