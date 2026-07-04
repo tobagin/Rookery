@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os/exec"
 	"os/user"
+	"strconv"
 	"strings"
 )
 
@@ -57,8 +58,11 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) (string,
 type UnitStatus struct {
 	Load     string `json:"load"`     // loaded, not-found, ...
 	Active   string `json:"active"`   // active, inactive, failed, activating, ...
-	Sub      string `json:"sub"`      // running, exited, dead, ...
+	Sub      string `json:"sub"`      // running, exited, dead, auto-restart, ...
 	UnitFile string `json:"unitFile"` // enabled, disabled, generated, ...
+	Result   string `json:"result"`   // success, exit-code, signal, ...
+	ExitCode int    `json:"exitCode"` // ExecMainStatus of the last run
+	Restarts int    `json:"restarts"` // NRestarts — a climbing value flags a restart loop
 }
 
 // Manager runs systemctl against a chosen scope.
@@ -137,7 +141,7 @@ func (m *Manager) Status(ctx context.Context, scope Scope, units []string) ([]Un
 	if len(units) == 0 {
 		return nil, nil
 	}
-	args := append([]string{"show", "--property=LoadState,ActiveState,SubState,UnitFileState"}, units...)
+	args := append([]string{"show", "--property=LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainStatus,NRestarts"}, units...)
 	out, err := m.run(ctx, scope, args...)
 	if err != nil {
 		return nil, err
@@ -150,11 +154,16 @@ func (m *Manager) Status(ctx context.Context, scope Scope, units []string) ([]Un
 			continue
 		}
 		b := blocks[i]
+		exitCode, _ := strconv.Atoi(b["ExecMainStatus"])
+		restarts, _ := strconv.Atoi(b["NRestarts"])
 		statuses[i] = UnitStatus{
 			Load:     b["LoadState"],
 			Active:   b["ActiveState"],
 			Sub:      b["SubState"],
 			UnitFile: b["UnitFileState"],
+			Result:   b["Result"],
+			ExitCode: exitCode,
+			Restarts: restarts,
 		}
 	}
 	return statuses, nil

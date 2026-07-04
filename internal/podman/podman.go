@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -52,10 +54,8 @@ func New(path string) *Client {
 	}
 }
 
-// Info queries /libpod/info. An error usually just means the Podman API
-// socket service isn't enabled; callers should degrade gracefully.
-func (c *Client) Info(ctx context.Context) (*Info, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://d/v5.0.0/libpod/info", nil)
+func (c *Client) get(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://d/v5.0.0/libpod"+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -63,10 +63,21 @@ func (c *Client) Info(ctx context.Context) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("podman info: %s", resp.Status)
+		resp.Body.Close()
+		return nil, fmt.Errorf("podman GET %s: %s", path, resp.Status)
 	}
+	return resp, nil
+}
+
+// Info queries /libpod/info. An error usually just means the Podman API
+// socket service isn't enabled; callers should degrade gracefully.
+func (c *Client) Info(ctx context.Context) (*Info, error) {
+	resp, err := c.get(ctx, "/info")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 	var raw struct {
 		Version struct {
 			Version string `json:"Version"`
@@ -86,4 +97,55 @@ func (c *Client) Info(ctx context.Context) (*Info, error) {
 		ContainersRunning: raw.Store.ContainerStore.Running,
 		ContainersTotal:   raw.Store.ContainerStore.Number,
 	}, nil
+}
+
+// ContainerSummary is one row of `podman ps --all`, as the import picker
+// needs it.
+type ContainerSummary struct {
+	ID      string            `json:"Id"`
+	Names   []string          `json:"Names"`
+	Image   string            `json:"Image"`
+	State   string            `json:"State"`
+	IsInfra bool              `json:"IsInfra"`
+	Labels  map[string]string `json:"Labels"`
+}
+
+// Name returns the primary container name.
+func (c ContainerSummary) Name() string {
+	if len(c.Names) > 0 {
+		return c.Names[0]
+	}
+	return c.ID
+}
+
+// Managed reports whether the container already belongs to a systemd unit
+// (Quadlet or podman generate systemd) and so needs no import.
+func (c ContainerSummary) Managed() bool {
+	_, ok := c.Labels["PODMAN_SYSTEMD_UNIT"]
+	return ok
+}
+
+// Containers lists all containers, including stopped ones.
+func (c *Client) Containers(ctx context.Context) ([]ContainerSummary, error) {
+	resp, err := c.get(ctx, "/containers/json?all=true")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out []ContainerSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// InspectContainer returns the raw inspect JSON for a container; the
+// convert package extracts what it needs from it.
+func (c *Client) InspectContainer(ctx context.Context, nameOrID string) ([]byte, error) {
+	resp, err := c.get(ctx, "/containers/"+url.PathEscape(nameOrID)+"/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }

@@ -1,7 +1,8 @@
 /* Rookery SPA — no framework, no build step. Hash routing:
    #/                     dashboard
    #/unit/<scope>/<name>  unit detail + editor + logs
-   #/new                  create a unit                                     */
+   #/new                  create a unit
+   #/import               convert podman run / compose / running containers  */
 "use strict";
 
 const $app = document.getElementById("app");
@@ -9,6 +10,7 @@ const $hoststrip = document.getElementById("hoststrip");
 
 let refreshTimer = null;
 let logSource = null;
+let authState = { required: false, authenticated: true };
 
 /* ---------- helpers ---------- */
 
@@ -23,6 +25,11 @@ async function api(path, opts = {}) {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
+  if (res.status === 401 && path !== "/api/login") {
+    authState.authenticated = false;
+    renderLogin();
+    throw new Error("authentication required");
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok && res.status !== 422) {
     throw new Error(body.error || `${res.status} ${res.statusText}`);
@@ -40,7 +47,9 @@ function stateClass(u) {
 
 function stateLabel(u) {
   if (u.load === "unknown") return "unknown";
-  return u.sub && u.sub !== u.active ? `${u.active} (${u.sub})` : u.active || "unknown";
+  let label = u.sub && u.sub !== u.active ? `${u.active} (${u.sub})` : u.active || "unknown";
+  if (u.result === "exit-code") label += ` · exit ${u.exitCode}`;
+  return label;
 }
 
 function stopStreams() {
@@ -53,7 +62,88 @@ function toast(msg, isError) {
   t.className = "toast" + (isError ? " toast-error" : "");
   t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 4000);
+  setTimeout(() => t.remove(), 5000);
+}
+
+/* ---------- syntax highlighting ----------
+   A <pre> with highlighted markup sits behind a transparent-text textarea
+   with identical metrics; input and scroll keep them in sync. */
+
+function highlightUnit(text) {
+  return esc(text)
+    .replace(/^([#;].*)$/gm, '<span class="hl-comment">$1</span>')
+    .replace(/^(\[[^\]\n]*\])[ \t]*$/gm, '<span class="hl-section">$1</span>')
+    .replace(/^([A-Za-z0-9_.-]+)(=)(.*)$/gm,
+      '<span class="hl-key">$1</span><span class="hl-eq">$2</span><span class="hl-val">$3</span>');
+}
+
+function enhanceEditor($ta) {
+  const wrap = document.createElement("div");
+  wrap.className = "editor-wrap";
+  $ta.parentNode.insertBefore(wrap, $ta);
+  const hl = document.createElement("pre");
+  hl.className = "editor-hl";
+  hl.setAttribute("aria-hidden", "true");
+  wrap.appendChild(hl);
+  wrap.appendChild($ta);
+  const sync = () => {
+    hl.innerHTML = highlightUnit($ta.value) + "\n";
+    hl.scrollTop = $ta.scrollTop;
+    hl.scrollLeft = $ta.scrollLeft;
+  };
+  $ta.addEventListener("input", sync);
+  $ta.addEventListener("scroll", () => {
+    hl.scrollTop = $ta.scrollTop;
+    hl.scrollLeft = $ta.scrollLeft;
+  });
+  sync();
+  return sync;
+}
+
+/* ---------- auth ---------- */
+
+async function checkAuth() {
+  try {
+    const { body } = await api("/api/auth");
+    authState = { required: !!body.required, authenticated: !!body.authenticated };
+  } catch { /* open mode if unreachable; the next call will re-ask */ }
+}
+
+function renderLogin() {
+  stopStreams();
+  $hoststrip.innerHTML = "";
+  $app.innerHTML = `
+    <div class="login">
+      <h1>🦭 Rookery</h1>
+      <p class="muted">Sign in to manage this host's Quadlets.</p>
+      <form id="login-form" class="toolbar">
+        <input type="password" id="login-pass" class="input" placeholder="Admin password" autocomplete="current-password">
+        <button class="btn btn-accent">Sign in</button>
+      </form>
+      <p id="login-err" class="banner banner-error" hidden></p>
+    </div>`;
+  const $err = document.getElementById("login-err");
+  document.getElementById("login-form").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    try {
+      await api("/api/login", {
+        method: "POST",
+        body: JSON.stringify({ password: document.getElementById("login-pass").value }),
+      });
+      authState.authenticated = true;
+      render();
+    } catch (e) {
+      $err.hidden = false;
+      $err.textContent = e.message;
+    }
+  });
+  document.getElementById("login-pass").focus();
+}
+
+async function logout() {
+  try { await api("/api/logout", { method: "POST" }); } catch { /* session may be gone already */ }
+  authState.authenticated = false;
+  renderLogin();
 }
 
 /* ---------- host strip ---------- */
@@ -68,8 +158,14 @@ async function renderHostStrip() {
     if (m.load1 != null) bits.push(`<span>load ${m.load1.toFixed(2)}</span>`);
     if (memPct != null) bits.push(`<span>mem ${memPct}%</span>`);
     if (body.podman) bits.push(`<span>podman ${esc(body.podman.version)} · ${body.podman.containersRunning}/${body.podman.containersTotal} running</span>`);
+    if (body.selinuxEnforcing) bits.push(`<span title="SELinux is enforcing; Rookery will hint about unlabeled bind mounts">selinux</span>`);
     if (!body.generatorAvailable) bits.push(`<span class="warn" title="podman quadlet generator not found; validation disabled">no validator</span>`);
+    if (authState.required && authState.authenticated) {
+      bits.push(`<a href="#" id="btn-logout" title="sign out">logout</a>`);
+    }
     $hoststrip.innerHTML = bits.join('<span class="sep">·</span>');
+    const lo = document.getElementById("btn-logout");
+    if (lo) lo.addEventListener("click", ev => { ev.preventDefault(); logout(); });
   } catch { /* strip is decorative; never block the app on it */ }
 }
 
@@ -92,8 +188,8 @@ async function renderDashboard() {
     ${scopeErrors}
     ${units.length ? "" : `<div class="empty">
        <p>No Quadlet units found.</p>
-       <p class="muted">Create your first one with <a href="#/new">＋ New unit</a> — the file lands in the Quadlet
-       directory on disk, exactly where <code>systemctl</code> expects it.</p></div>`}
+       <p class="muted">Create one with <a href="#/new">＋ New unit</a>, or convert an existing
+       <code>podman run</code> command, compose file, or running container with <a href="#/import">⤵ Import</a>.</p></div>`}
     ${section("Failed", groups.failed, "failed")}
     ${section("Running", groups.running, "running")}
     ${section("Transitioning", groups.pending, "pending")}
@@ -118,6 +214,7 @@ async function renderDashboard() {
 function card(u) {
   const cls = stateClass(u);
   const canStart = cls === "stopped" || cls === "failed";
+  const loop = u.restarts > 0 && (cls === "failed" || u.sub === "auto-restart");
   return `
   <a class="card ${cls}" href="#/unit/${encodeURIComponent(u.scope)}/${encodeURIComponent(u.name)}">
     <div class="card-head">
@@ -125,6 +222,7 @@ function card(u) {
       <span class="card-name">${esc(u.name)}</span>
       <span class="badge">${esc(u.kind)}</span>
       ${u.scope !== "system" ? `<span class="badge badge-user" title="rootless unit of ${esc(u.scope)}">${esc(u.scope)}</span>` : ""}
+      ${loop ? `<span class="badge badge-loop" title="service restarted ${u.restarts} times — likely a crash loop">↻${u.restarts}</span>` : ""}
     </div>
     <div class="card-sub">${esc(u.description || u.image || "")}</div>
     <div class="card-foot">
@@ -144,6 +242,19 @@ function btnAction(u, action, icon) {
 
 /* ---------- unit detail ---------- */
 
+function validationHTML(v, hints) {
+  let out = "";
+  if (v) {
+    out += `<pre class="output ${v.valid ? "ok" : "err"}">${esc(
+      (v.available ? (v.valid ? "✓ valid" : "✗ invalid") : "validator unavailable") +
+      (v.output ? "\n\n" + v.output : ""))}</pre>`;
+  }
+  for (const h of hints || []) {
+    out += `<p class="banner banner-warn">${esc(h)}</p>`;
+  }
+  return out;
+}
+
 async function renderUnit(scope, name) {
   let unit, content;
   try {
@@ -154,12 +265,14 @@ async function renderUnit(scope, name) {
     return;
   }
   const cls = stateClass(unit);
+  const loop = unit.restarts > 0;
   $app.innerHTML = `
     <div class="detail-head">
       <a class="btn btn-sm" href="#/">←</a>
       <h1><span class="dot ${cls}"></span> ${esc(unit.name)}</h1>
       <span class="badge">${esc(unit.kind)}</span>
       ${scope !== "system" ? `<span class="badge badge-user">${esc(scope)}</span>` : ""}
+      ${loop ? `<span class="badge badge-loop" title="restart count since last stop">↻${unit.restarts}</span>` : ""}
       <span class="state">${esc(stateLabel(unit))}${unit.unitFile ? " · " + esc(unit.unitFile) : ""}</span>
     </div>
     <p class="muted mono">${esc(unit.path)}${unit.readOnly ? " (read-only)" : ""}</p>
@@ -176,7 +289,7 @@ async function renderUnit(scope, name) {
         <button class="btn btn-accent" id="btn-save" ${unit.readOnly ? "disabled" : ""}>Save + reload</button>
         <label class="chk"><input type="checkbox" id="chk-restart"> restart after save</label>
       </div>
-      <pre id="validation" class="output" hidden></pre>
+      <div id="validation"></div>
     </section>
     <section>
       <h2>Logs <label class="chk"><input type="checkbox" id="chk-follow" checked> follow</label></h2>
@@ -207,15 +320,8 @@ async function renderUnit(scope, name) {
   });
 
   const $editor = document.getElementById("editor");
+  enhanceEditor($editor);
   const $validation = document.getElementById("validation");
-
-  function showValidation(v) {
-    $validation.hidden = false;
-    $validation.textContent = (v.available
-      ? (v.valid ? "✓ valid" : "✗ invalid") : "validator unavailable") +
-      (v.output ? "\n\n" + v.output : "");
-    $validation.className = "output " + (v.valid ? "ok" : "err");
-  }
 
   document.getElementById("btn-validate").addEventListener("click", async () => {
     try {
@@ -223,7 +329,7 @@ async function renderUnit(scope, name) {
         method: "POST",
         body: JSON.stringify({ scope, name, content: $editor.value }),
       });
-      showValidation(body.validation);
+      $validation.innerHTML = validationHTML(body.validation, body.hints);
     } catch (e) { toast(e.message, true); }
   });
 
@@ -233,7 +339,7 @@ async function renderUnit(scope, name) {
         method: "PUT",
         body: JSON.stringify({ content: $editor.value, restart: document.getElementById("chk-restart").checked }),
       });
-      if (body.validation) showValidation(body.validation);
+      $validation.innerHTML = validationHTML(body.validation, body.hints);
       if (status === 422) { toast("rejected by validator", true); return; }
       (body.warnings || []).forEach(warning => toast(warning, true));
       toast(`saved ${name} + daemon-reload`);
@@ -303,9 +409,15 @@ File=Containerfile
 `,
 };
 
+async function fetchScopes() {
+  try {
+    const { body } = await api("/api/host");
+    return body.scopes || ["system"];
+  } catch { return ["system"]; }
+}
+
 async function renderNew() {
-  let scopes = ["system"];
-  try { scopes = (await api("/api/host")).body.scopes || scopes; } catch { /* keep default */ }
+  const scopes = await fetchScopes();
   $app.innerHTML = `
     <div class="detail-head"><a class="btn btn-sm" href="#/">←</a><h1>New unit</h1></div>
     <div class="toolbar">
@@ -317,11 +429,12 @@ async function renderNew() {
     <div class="toolbar">
       <button class="btn btn-accent" id="btn-create">Validate + create</button>
     </div>
-    <pre id="validation" class="output" hidden></pre>`;
+    <div id="validation"></div>`;
 
   const $kind = document.getElementById("new-kind");
   const $editor = document.getElementById("editor");
-  $kind.addEventListener("change", () => { $editor.value = TEMPLATES[$kind.value]; });
+  const syncHl = enhanceEditor($editor);
+  $kind.addEventListener("change", () => { $editor.value = TEMPLATES[$kind.value]; syncHl(); });
 
   document.getElementById("btn-create").addEventListener("click", async () => {
     const base = document.getElementById("new-name").value.trim();
@@ -334,11 +447,7 @@ async function renderNew() {
         method: "PUT",
         body: JSON.stringify({ content: $editor.value }),
       });
-      if (body.validation && (!body.validation.valid || body.validation.output)) {
-        $validation.hidden = false;
-        $validation.textContent = body.validation.output || "";
-        $validation.className = "output " + (body.validation.valid ? "ok" : "err");
-      }
+      $validation.innerHTML = validationHTML(body.validation, body.hints);
       if (status === 422) { toast("rejected by validator", true); return; }
       toast(`created ${name}`);
       location.hash = `#/unit/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`;
@@ -346,10 +455,147 @@ async function renderNew() {
   });
 }
 
+/* ---------- import / convert ---------- */
+
+const IMPORT_MODES = {
+  run: {
+    label: "podman run command",
+    help: "Paste a `podman run ...` (or `docker run ...`) command; multi-line with backslashes is fine.",
+    placeholder: "podman run -d --name jellyfin -p 8096:8096 -v /srv/media:/media:Z docker.io/jellyfin/jellyfin:latest",
+  },
+  compose: {
+    label: "compose file",
+    help: "Paste a docker-compose / podman-compose YAML file. Each service becomes a .container unit; declared volumes and networks become .volume/.network units.",
+    placeholder: "services:\n  app:\n    image: ...",
+  },
+  container: {
+    label: "running container",
+    help: "Import an existing container's configuration as a Quadlet unit. The container itself is not touched — stop it once the unit runs.",
+  },
+};
+
+async function renderImport() {
+  const scopes = await fetchScopes();
+  $app.innerHTML = `
+    <div class="detail-head"><a class="btn btn-sm" href="#/">←</a><h1>Import to Quadlet</h1></div>
+    <div class="toolbar">
+      <select id="imp-kind" class="input">
+        ${Object.entries(IMPORT_MODES).map(([k, m]) => `<option value="${k}">${m.label}</option>`).join("")}
+      </select>
+      <select id="imp-scope" class="input" title="scope for created units">
+        ${scopes.map(s => `<option>${esc(s)}</option>`).join("")}
+      </select>
+    </div>
+    <p id="imp-help" class="muted"></p>
+    <div id="imp-input"></div>
+    <div class="toolbar"><button class="btn btn-accent" id="btn-convert">Convert</button></div>
+    <div id="imp-results"></div>`;
+
+  const $kind = document.getElementById("imp-kind");
+  const $input = document.getElementById("imp-input");
+  const $help = document.getElementById("imp-help");
+  const $results = document.getElementById("imp-results");
+
+  async function renderInput() {
+    const kind = $kind.value;
+    $help.textContent = IMPORT_MODES[kind].help;
+    $results.innerHTML = "";
+    if (kind === "container") {
+      $input.innerHTML = `<p class="muted">loading containers…</p>`;
+      try {
+        const { body } = await api("/api/import/containers");
+        const rows = body.containers || [];
+        if (!rows.length) {
+          $input.innerHTML = `<p class="banner banner-warn">No containers found via the Podman API socket.</p>`;
+          return;
+        }
+        $input.innerHTML = `
+          <select id="imp-container" class="input">
+            ${rows.map(c => `<option value="${esc(c.id)}" ${c.managed ? "disabled" : ""}>
+              ${esc(c.name)} — ${esc(c.image)} (${esc(c.state)})${c.managed ? " — already systemd-managed" : ""}
+            </option>`).join("")}
+          </select>`;
+      } catch (e) {
+        $input.innerHTML = `<p class="banner banner-error">${esc(e.message)}</p>`;
+      }
+    } else {
+      $input.innerHTML = `<textarea id="imp-text" spellcheck="false" placeholder="${esc(IMPORT_MODES[kind].placeholder)}"></textarea>`;
+    }
+  }
+
+  $kind.addEventListener("change", renderInput);
+  await renderInput();
+
+  document.getElementById("btn-convert").addEventListener("click", async () => {
+    const kind = $kind.value;
+    const input = kind === "container"
+      ? (document.getElementById("imp-container") || {}).value
+      : (document.getElementById("imp-text") || {}).value;
+    if (!input) { toast("nothing to convert", true); return; }
+    $results.innerHTML = `<p class="muted">converting…</p>`;
+    try {
+      const { status, body } = await api("/api/convert", {
+        method: "POST",
+        body: JSON.stringify({ kind, input }),
+      });
+      if (status === 422) {
+        $results.innerHTML = `<p class="banner banner-error">${esc(body.error || "conversion failed")}</p>`;
+        return;
+      }
+      renderResults(body.units || []);
+    } catch (e) {
+      $results.innerHTML = `<p class="banner banner-error">${esc(e.message)}</p>`;
+    }
+  });
+
+  function renderResults(units) {
+    $results.innerHTML = `<h2>${units.length} unit${units.length === 1 ? "" : "s"} generated — review, then create</h2>` +
+      units.map((u, i) => `
+      <section class="import-unit" data-i="${i}">
+        <div class="toolbar">
+          <input class="input imp-name" value="${esc(u.name)}">
+          <button class="btn btn-accent imp-create">Create</button>
+          <span class="imp-status muted"></span>
+        </div>
+        ${(u.warnings || []).map(w => `<p class="banner banner-warn">${esc(w)}</p>`).join("")}
+        <textarea class="imp-editor" spellcheck="false">${esc(u.content || "")}</textarea>
+      </section>`).join("");
+
+    $results.querySelectorAll(".import-unit").forEach(sec => {
+      const $editor = sec.querySelector(".imp-editor");
+      enhanceEditor($editor);
+      sec.querySelector(".imp-create").addEventListener("click", async () => {
+        const name = sec.querySelector(".imp-name").value.trim();
+        const scope = document.getElementById("imp-scope").value;
+        const $status = sec.querySelector(".imp-status");
+        try {
+          const { status, body } = await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            body: JSON.stringify({ content: $editor.value }),
+          });
+          if (status === 422) {
+            $status.innerHTML = `<span class="warn">rejected by validator</span>`;
+            sec.insertAdjacentHTML("beforeend", validationHTML(body.validation, body.hints));
+            return;
+          }
+          $status.innerHTML = `created — <a href="#/unit/${encodeURIComponent(scope)}/${encodeURIComponent(name)}">open ${esc(name)}</a>`;
+          (body.hints || []).forEach(h => toast(h, true));
+        } catch (e) {
+          $status.innerHTML = `<span class="warn">${esc(e.message)}</span>`;
+        }
+      });
+    });
+  }
+}
+
 /* ---------- router ---------- */
 
 async function render() {
   stopStreams();
+  if (authState.required && !authState.authenticated) {
+    renderLogin();
+    return;
+  }
   renderHostStrip();
   const hash = location.hash || "#/";
   const parts = hash.slice(2).split("/").filter(Boolean).map(decodeURIComponent);
@@ -358,6 +604,8 @@ async function render() {
       await renderUnit(parts[1], parts[2]);
     } else if (parts[0] === "new") {
       await renderNew();
+    } else if (parts[0] === "import") {
+      await renderImport();
     } else {
       await renderDashboard();
       refreshTimer = setInterval(() => {
@@ -365,9 +613,10 @@ async function render() {
       }, 5000);
     }
   } catch (e) {
+    if (!authState.authenticated) return; // login view already rendered
     $app.innerHTML = `<p class="banner banner-error">${esc(e.message)}</p>`;
   }
 }
 
 window.addEventListener("hashchange", render);
-render();
+checkAuth().then(render);

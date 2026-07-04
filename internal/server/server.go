@@ -49,6 +49,8 @@ type Options struct {
 	Validate ValidateFunc
 	Podman   *podman.Client // nil disables the Podman panel
 	Version  string
+	Password string      // empty disables authentication
+	SELinux  func() bool // nil -> detect on the host
 }
 
 // Server routes API and UI requests.
@@ -58,6 +60,9 @@ type Server struct {
 	validate ValidateFunc
 	pod      *podman.Client
 	version  string
+	password string
+	selinux  func() bool
+	sess     *sessions
 	mux      *http.ServeMux
 }
 
@@ -69,11 +74,22 @@ func New(opts Options) *Server {
 		validate: opts.Validate,
 		pod:      opts.Podman,
 		version:  opts.Version,
+		password: opts.Password,
+		selinux:  opts.SELinux,
+		sess:     newSessions(),
 		mux:      http.NewServeMux(),
 	}
 	if s.validate == nil {
 		s.validate = quadlet.Validate
 	}
+	if s.selinux == nil {
+		s.selinux = quadlet.SELinuxEnforcing
+	}
+	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
+	s.mux.HandleFunc("POST /api/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
+	s.mux.HandleFunc("POST /api/convert", s.handleConvert)
+	s.mux.HandleFunc("GET /api/import/containers", s.handleImportContainers)
 	s.mux.HandleFunc("GET /api/units", s.handleListUnits)
 	s.mux.HandleFunc("GET /api/units/{scope}/{name}", s.handleGetUnit)
 	s.mux.HandleFunc("PUT /api/units/{scope}/{name}", s.handlePutUnit)
@@ -87,6 +103,10 @@ func New(opts Options) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.authRequired(r) && !s.authenticated(r) {
+		httpError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	s.mux.ServeHTTP(w, r)
 }
 

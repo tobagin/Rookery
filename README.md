@@ -21,10 +21,17 @@ landscape, and roadmap.
 What works today:
 
 - **Dashboard** — all Quadlet units grouped by state (failed / running /
-  stopped), host metrics strip, Podman version and container counts.
-- **Editor** — view and edit unit files in the browser; every save is
-  validated with the host's `podman-system-generator --dryrun` first, then
-  written atomically and followed by `daemon-reload` (+ optional restart).
+  stopped), host metrics strip, Podman version and container counts,
+  restart-loop (`↻N`) and exit-code surfacing.
+- **Editor** — syntax-highlighted unit-file editing in the browser; every
+  save is validated with the host's `podman-system-generator --dryrun`
+  first, then written atomically and followed by `daemon-reload`
+  (+ optional restart). On SELinux-enforcing hosts, unlabeled bind mounts
+  get a `:Z`/`:z` hint before they bite.
+- **Importer** — convert `podman run` commands and compose files into
+  Quadlet units, or import an existing container's configuration via the
+  Podman API; everything the converter has to guess about becomes an
+  explicit warning on the draft.
 - **Create / delete** units for every Quadlet kind (`.container`, `.pod`,
   `.network`, `.volume`, `.kube`, `.image`, `.build`), with starter templates.
 - **Lifecycle** — start / stop / restart / enable / disable via systemd.
@@ -32,15 +39,18 @@ What works today:
 - **Rootless-aware** — run rootless to manage your own
   `~/.config/containers/systemd/`; run rootful with `-users alice,bob` to
   additionally manage those users' sessions (via `systemctl --user --machine`).
+- **Admin login** — single-password auth (`ROOKERY_PASSWORD` or
+  `-password-file`) with in-memory sessions; without a password Rookery is
+  open and warns loudly unless bound to loopback.
 - **Mobile-responsive UI** — passes the "restart it from the couch" test.
 - **Single static binary**, zero Go dependencies outside the standard library.
 
-Not yet: import/convert (`podlet` wrapper), Git history, GPU panel,
-multi-host, auth. See the [roadmap](#roadmap).
+Not yet: Git history, GPU panel, multi-host, image-update checks. See the
+[roadmap](#roadmap).
 
-> ⚠️ There is **no authentication yet**. Rookery binds to `127.0.0.1` by
-> default; only expose it via a reverse proxy that adds auth, or an SSH
-> tunnel.
+> ⚠️ Set a password (`ROOKERY_PASSWORD` or `-password-file`) before exposing
+> Rookery beyond `127.0.0.1`, and put TLS in front of it (reverse proxy) —
+> the built-in server speaks plain HTTP.
 
 ## Quick start
 
@@ -57,6 +67,7 @@ make build          # or: go build ./cmd/rookery
 |---|---|---|---|
 | `-listen` | `ROOKERY_LISTEN` | `127.0.0.1:7878` | listen address |
 | `-users` | `ROOKERY_USERS` | — | extra users to manage (rootful only) |
+| `-password-file` | `ROOKERY_PASSWORD_FILE` | — | admin password file (or set `ROOKERY_PASSWORD`) |
 
 Dogfooding: [packaging/rookery.container](packaging/rookery.container) runs
 Rookery itself as a Quadlet.
@@ -97,7 +108,10 @@ interface, so a native D-Bus client can replace it without touching handlers.
 | `POST /api/units/{scope}/{name}/action` | `{"action": "start\|stop\|restart\|enable\|disable"}` |
 | `GET /api/units/{scope}/{name}/logs?follow=1` | journal stream (SSE) |
 | `POST /api/validate` | dry-run a unit body without saving |
+| `POST /api/convert` | `{"kind": "run\|compose\|container", "input": ...}` → draft units |
+| `GET /api/import/containers` | existing containers eligible for import |
 | `GET /api/host` | metrics, Podman info, scopes |
+| `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth |
 
 `{scope}` is `system` or a username.
 
@@ -114,9 +128,9 @@ no Node toolchain required.
 
 ## Roadmap
 
-- **MVP**: importer/generator (`podman run` + compose → Quadlet, wraps
-  `podlet`), import of running containers, restart-loop surfacing, syntax
-  highlighting, admin login.
+- **MVP polish**: optional `podlet` integration for edge-case conversions
+  (the built-in converter covers the common flags/keys and warns about the
+  rest), pod-level composition view.
 - **v1**: agentless multi-host over SSH, Git integration (commit on save,
   history, rollback), GPU panel (attachments, utilization, CDI helper),
   image-update checks.

@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/tobagin/rookery/internal/convert"
 	"github.com/tobagin/rookery/internal/hostinfo"
 	"github.com/tobagin/rookery/internal/journal"
 	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/tobagin/rookery/internal/systemd"
 )
 
 // unitJSON is one unit as the API reports it: the file on disk plus live
@@ -29,6 +31,14 @@ type unitJSON struct {
 	Active      string `json:"active"`
 	Sub         string `json:"sub"`
 	UnitFile    string `json:"unitFile"`
+	Result      string `json:"result,omitempty"`
+	ExitCode    int    `json:"exitCode"`
+	Restarts    int    `json:"restarts"`
+}
+
+func (u *unitJSON) fillStatus(st systemd.UnitStatus) {
+	u.Load, u.Active, u.Sub, u.UnitFile = st.Load, st.Active, st.Sub, st.UnitFile
+	u.Result, u.ExitCode, u.Restarts = st.Result, st.ExitCode, st.Restarts
 }
 
 func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
@@ -62,8 +72,7 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 				Load:     "unknown",
 			}
 			if i < len(statuses) {
-				st := statuses[i]
-				uj.Load, uj.Active, uj.Sub, uj.UnitFile = st.Load, st.Active, st.Sub, st.UnitFile
+				uj.fillStatus(statuses[i])
 			}
 			if data, err := os.ReadFile(u.Path); err == nil {
 				if f, err := quadlet.Parse(data); err == nil {
@@ -129,8 +138,7 @@ func (s *Server) unitJSONFor(r *http.Request, area Area, name, path string) unit
 		Load:     "unknown",
 	}
 	if statuses, err := s.sysd.Status(r.Context(), area.Scope, []string{service}); err == nil && len(statuses) == 1 {
-		st := statuses[0]
-		uj.Load, uj.Active, uj.Sub, uj.UnitFile = st.Load, st.Active, st.Sub, st.UnitFile
+		uj.fillStatus(statuses[0])
 	}
 	return uj
 }
@@ -200,7 +208,17 @@ func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
 		"validation": validation,
 		"created":    !exists,
 		"warnings":   warnings,
+		"hints":      s.selinuxHints(req.Content),
 	})
+}
+
+// selinuxHints flags unlabeled bind mounts, but only on hosts where that
+// will actually bite (SELinux enforcing).
+func (s *Server) selinuxHints(content string) []string {
+	if !s.selinux() {
+		return nil
+	}
+	return quadlet.VolumeHints(content)
 }
 
 func (s *Server) handleDeleteUnit(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +310,82 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"validation": validation})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"validation": validation,
+		"hints":      s.selinuxHints(req.Content),
+	})
+}
+
+func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind  string `json:"kind"`
+		Input string `json:"input"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	var units []convert.GeneratedUnit
+	var err error
+	switch req.Kind {
+	case "run":
+		var u convert.GeneratedUnit
+		u, err = convert.FromRunCommand(req.Input)
+		units = []convert.GeneratedUnit{u}
+	case "compose":
+		units, err = convert.FromCompose(req.Input)
+	case "container":
+		if s.pod == nil {
+			httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
+			return
+		}
+		var raw []byte
+		raw, err = s.pod.InspectContainer(r.Context(), req.Input)
+		if err == nil {
+			var u convert.GeneratedUnit
+			u, err = convert.FromInspect(raw)
+			units = []convert.GeneratedUnit{u}
+		}
+	default:
+		httpError(w, http.StatusBadRequest, "kind must be run, compose, or container")
+		return
+	}
+	if err != nil {
+		httpError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"units": units})
+}
+
+func (s *Server) handleImportContainers(w http.ResponseWriter, r *http.Request) {
+	if s.pod == nil {
+		httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
+		return
+	}
+	list, err := s.pod.Containers(r.Context())
+	if err != nil {
+		httpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	type row struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Image   string `json:"image"`
+		State   string `json:"state"`
+		Managed bool   `json:"managed"`
+	}
+	rows := []row{}
+	for _, c := range list {
+		if c.IsInfra {
+			continue
+		}
+		id := c.ID
+		if len(id) > 12 {
+			id = id[:12]
+		}
+		rows = append(rows, row{ID: id, Name: c.Name(), Image: c.Image, State: c.State, Managed: c.Managed()})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"containers": rows})
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -351,6 +444,7 @@ func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 		"version":            s.version,
 		"metrics":            hostinfo.Read(),
 		"generatorAvailable": quadlet.FindGenerator() != "",
+		"selinuxEnforcing":   s.selinux(),
 		"scopes":             s.scopeLabels(),
 	}
 	if s.pod != nil {

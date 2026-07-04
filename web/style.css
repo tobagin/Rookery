@@ -92,6 +92,7 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
   flex: none;
 }
 .badge-user { color: var(--accent); border-color: var(--accent); }
+.badge-loop { color: var(--pending); border-color: var(--pending); font-weight: 700; }
 
 .btn {
   background: var(--bg-input);
@@ -140,6 +141,50 @@ textarea {
 }
 textarea:focus { outline: none; border-color: var(--accent); }
 textarea[readonly] { opacity: .7; }
+
+/* Syntax-highlighted editor: a <pre> mirror behind a transparent textarea.
+   Both layers must share exact metrics. */
+.editor-wrap { position: relative; }
+.editor-wrap textarea {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.editor-wrap textarea::selection { background: rgba(76, 194, 255, .3); }
+.editor-hl {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  tab-size: 4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hl-section { color: var(--accent); font-weight: 700; }
+.hl-comment { color: var(--muted); font-style: italic; }
+.hl-key { color: #7ce38b; }
+.hl-eq { color: var(--muted); }
+.hl-val { color: var(--fg); }
+
+.login { max-width: 380px; margin: 12vh auto 0; text-align: center; }
+.login h1 { font-size: 28px; }
+.login .toolbar { justify-content: center; }
+
+.import-unit { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.import-unit .imp-name { min-width: 220px; }
+.imp-status .warn { color: var(--failed); }
 
 .output {
   background: var(--bg-input);

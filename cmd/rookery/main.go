@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/user"
@@ -22,6 +23,7 @@ var version = "dev"
 func main() {
 	listen := flag.String("listen", envOr("ROOKERY_LISTEN", "127.0.0.1:7878"), "address to listen on")
 	users := flag.String("users", envOr("ROOKERY_USERS", ""), "comma-separated users whose rootless quadlets to manage (rootful only)")
+	passwordFile := flag.String("password-file", envOr("ROOKERY_PASSWORD_FILE", ""), "file containing the admin password (or set ROOKERY_PASSWORD)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -30,16 +32,25 @@ func main() {
 		return
 	}
 
+	password, err := loadPassword(*passwordFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if password == "" && !isLoopback(*listen) {
+		log.Printf("WARNING: no admin password configured while listening on %s — anyone who can reach this port controls your containers. Set ROOKERY_PASSWORD or -password-file.", *listen)
+	}
+
 	areas, err := detectAreas(*users)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	srv := server.New(server.Options{
-		Areas:   areas,
-		Systemd: systemd.NewManager(),
-		Podman:  podman.New(podman.SocketPath()),
-		Version: version,
+		Areas:    areas,
+		Systemd:  systemd.NewManager(),
+		Podman:   podman.New(podman.SocketPath()),
+		Version:  version,
+		Password: password,
 	})
 
 	labels := make([]string, len(areas))
@@ -92,4 +103,28 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// loadPassword prefers an explicit password file over the environment.
+func loadPassword(file string) (string, error) {
+	if file != "" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("-password-file: %w", err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
+	return os.Getenv("ROOKERY_PASSWORD"), nil
+}
+
+func isLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
