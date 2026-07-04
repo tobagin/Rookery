@@ -1,7 +1,7 @@
 # PRD — Rookery
 
 **Rookery — a Quadlet-native web UI for Podman hosts.** (A rookery is where a pod of seals gathers.)
-Version 0.2 · 2026-07-04 · Author: tobagin · License: Apache-2.0
+Version 0.3 · 2026-07-04 · Author: tobagin · License: Apache-2.0
 
 ---
 
@@ -73,7 +73,8 @@ serves them well).
   validation before save; write → `daemon-reload` → restart flow with diff
   preview.
 - **Generator/importer**: convert `podman run` commands and compose files
-  into Quadlet units (wraps `podlet`); import existing running containers.
+  into Quadlet units (native Go conversion, no podlet dependency); import
+  existing running containers.
 - **Lifecycle & logs**: start/stop/restart/enable, live `journalctl` streaming,
   exit-code and restart-loop surfacing.
 - **Rootless awareness**: enumerate configured users' `~/.config/containers/systemd/`,
@@ -95,16 +96,19 @@ serves them well).
 
 ## 6. Architecture sketch
 
-- **Backend**: Go. Talks to (a) systemd via D-Bus (per-user sessions included),
+- **Backend**: Go, zero third-party dependencies. Talks to (a) systemd via
+  `systemctl` (per-user sessions via `--user --machine user@.host`),
   (b) Podman via its native REST socket (not the Docker shim), (c) the
-  filesystem for unit files, (d) `journald` for logs. No database — state on
-  disk plus an optional small bbolt cache.
-- **Frontend**: single-page app served from the same binary; WebSocket for
-  logs/stats streams.
+  filesystem for unit files, (d) logs via `journalctl`. No database, no
+  cache — the server is stateless and re-reads unit files from disk per
+  request.
+- **Frontend**: single-page app embedded in the same binary; Server-Sent
+  Events for log streams, polled JSON for host/GPU stats.
 - **Deploy**: one binary + a systemd unit (dogfood: ship it as a Quadlet).
   Rootful install manages all users; rootless install manages self only.
-- **Multi-host**: SSH out from the primary node, run a bundled static helper
-  remotely (pattern proven by Ansible/rport) — no long-lived agents.
+- **Multi-host**: SSH out from the primary node; every remote operation is a
+  single `ssh` invocation wrapping a POSIX shell script — nothing installed
+  on the target, no long-lived agents.
 
 ## 7. Competitive landscape (June 2026)
 
