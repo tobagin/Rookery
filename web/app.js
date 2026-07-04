@@ -266,7 +266,10 @@ async function renderUsers() {
     <div class="detail-head"><a class="btn btn-sm" href="#/">←</a><h1>Users</h1></div>
     <p class="muted">Admins have full control; viewers get the same read-only dashboard as a
     share link, but with their own login and no expiry.</p>
-    <div id="user-list"><p class="muted">loading…</p></div>
+    <section>
+      <h2>Accounts</h2>
+      <div id="user-list"><p class="muted">loading…</p></div>
+    </section>
     <section>
       <h2>Add user</h2>
       <div class="toolbar">
@@ -472,6 +475,7 @@ async function renderDashboard() {
     ${tiles}
     ${gpuHTML}
     ${units.length ? "" : `<div class="empty">
+       <p style="font-size:40px; margin:0">🦭</p>
        <p>No Quadlet units found.</p>
        <p class="muted">Create one with <a href="#/new">＋ New unit</a>, or convert an existing
        <code>podman run</code> command, compose file, or running container with <a href="#/import">⤵ Import</a>.</p></div>`}
@@ -639,16 +643,16 @@ async function renderUnit(scope, name) {
       ${(unit.gpus || []).map(g => `<span class="badge badge-gpu">${esc(g)}</span>`).join("")}
       <span class="state">${esc(stateLabel(unit))}${unit.unitFile ? " · " + esc(unit.unitFile) : ""}</span>
     </div>
-    <p class="muted mono">${esc(unit.path)}${unit.readOnly ? " (read-only)" : ""}</p>
+    <p class="unit-path mono">${esc(unit.path)}${unit.readOnly ? " (read-only)" : ""}</p>
     ${updateInfo[`${scope}/${name}`]?.updateAvailable ? `
     <div class="banner banner-warn update-banner">
       The registry serves a newer digest for <code>${esc(unit.image || "this image")}</code>.
       <button class="btn btn-accent btn-sm" id="btn-pull-update">Pull new image + restart</button>
     </div>` : ""}
     <div class="toolbar">
-      ${["start", "stop", "restart", "enable", "disable"].map(a =>
-        `<button class="btn" data-act="${a}">${a}</button>`).join("")}
-      <button class="btn btn-danger" data-act="delete">delete</button>
+      ${[["start", "▶"], ["stop", "■"], ["restart", "↻"], ["enable", "✓"], ["disable", "⊘"]].map(([a, icon]) =>
+        `<button class="btn" data-act="${a}">${icon} ${a}</button>`).join("")}
+      <button class="btn btn-danger" data-act="delete">🗑 delete</button>
     </div>
     ${unit.kind === "pod" ? `<section>
       <h2>Members</h2>
@@ -971,16 +975,19 @@ async function renderNew() {
   const scopes = await fetchScopes();
   $app.innerHTML = `
     <div class="detail-head"><a class="btn btn-sm" href="#/">←</a><h1>New unit</h1></div>
-    <div class="toolbar">
-      <input id="new-name" class="input" placeholder="name (e.g. jellyfin)" autocomplete="off">
-      <select id="new-kind" class="input">${Object.keys(TEMPLATES).map(k => `<option>${k}</option>`).join("")}</select>
-      <select id="new-scope" class="input">${scopes.map(s => `<option>${esc(s)}</option>`).join("")}</select>
-    </div>
-    <textarea id="editor" spellcheck="false">${esc(TEMPLATES.container)}</textarea>
-    <div class="toolbar">
-      <button class="btn btn-accent" id="btn-create">Validate + create</button>
-    </div>
-    <div id="validation"></div>`;
+    <section>
+      <h2>Definition</h2>
+      <div class="toolbar">
+        <input id="new-name" class="input" placeholder="name (e.g. jellyfin)" autocomplete="off">
+        <select id="new-kind" class="input">${Object.keys(TEMPLATES).map(k => `<option>${k}</option>`).join("")}</select>
+        <select id="new-scope" class="input">${scopes.map(s => `<option>${esc(s)}</option>`).join("")}</select>
+      </div>
+      <textarea id="editor" spellcheck="false">${esc(TEMPLATES.container)}</textarea>
+      <div class="toolbar">
+        <button class="btn btn-accent" id="btn-create">Validate + create</button>
+      </div>
+      <div id="validation"></div>
+    </section>`;
 
   const $kind = document.getElementById("new-kind");
   const $editor = document.getElementById("editor");
@@ -1029,17 +1036,20 @@ async function renderImport() {
   const scopes = await fetchScopes();
   $app.innerHTML = `
     <div class="detail-head"><a class="btn btn-sm" href="#/">←</a><h1>Import to Quadlet</h1></div>
-    <div class="toolbar">
-      <select id="imp-kind" class="input">
-        ${Object.entries(IMPORT_MODES).map(([k, m]) => `<option value="${k}">${m.label}</option>`).join("")}
-      </select>
-      <select id="imp-scope" class="input" title="scope for created units">
-        ${scopes.map(s => `<option>${esc(s)}</option>`).join("")}
-      </select>
-    </div>
-    <p id="imp-help" class="muted"></p>
-    <div id="imp-input"></div>
-    <div class="toolbar"><button class="btn btn-accent" id="btn-convert">Convert</button></div>
+    <section>
+      <h2>Source</h2>
+      <div class="toolbar">
+        <select id="imp-kind" class="input">
+          ${Object.entries(IMPORT_MODES).map(([k, m]) => `<option value="${k}">${m.label}</option>`).join("")}
+        </select>
+        <select id="imp-scope" class="input" title="scope for created units">
+          ${scopes.map(s => `<option>${esc(s)}</option>`).join("")}
+        </select>
+      </div>
+      <p id="imp-help" class="muted"></p>
+      <div id="imp-input"></div>
+      <div class="toolbar"><button class="btn btn-accent" id="btn-convert">Convert</button></div>
+    </section>
     <div id="imp-results"></div>`;
 
   const $kind = document.getElementById("imp-kind");
@@ -1146,7 +1156,10 @@ async function renderSecrets() {
     <div class="detail-head"><a class="btn btn-sm" href="#/">←</a><h1>Secrets</h1></div>
     <p class="muted">Podman secrets are write-only: set a value here, reference it from a unit with
       <code>Secret=name</code> (the editor's "Add secret…" helper inserts it) — the value can never be read back.</p>
-    <div id="sec-list"><p class="muted">loading…</p></div>
+    <section>
+      <h2>Stored secrets</h2>
+      <div id="sec-list"><p class="muted">loading…</p></div>
+    </section>
     <section>
       <h2>New secret</h2>
       <div class="toolbar">

@@ -260,11 +260,33 @@ main { padding: 20px 18px 48px; max-width: 1160px; margin: 0 auto; }
 .input:focus { outline: none; border-color: var(--accent); }
 .input-filter { min-width: 220px; }
 
-.detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.detail-head h1 { font-size: 20px; margin: 0; display: flex; align-items: center; gap: 8px; letter-spacing: -0.01em; }
-.detail-head .state { color: var(--muted); font-size: 13px; }
+.detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 2px; }
+.detail-head h1 { font-size: 24px; font-weight: 750; margin: 0; display: flex; align-items: center; gap: 10px; letter-spacing: -0.02em; }
+.detail-head .state { color: var(--fg-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.unit-path { color: var(--muted); font-size: 12px; margin: 2px 0 0; word-break: break-all; }
 
-section h2 { font-size: 15px; margin: 24px 0 8px; display: flex; align-items: center; gap: 12px; }
+/* Every content section is a panel — same elevation language as the
+   dashboard cards. Dashboard unit groups opt out (they're grids of cards
+   already). */
+main section:not(.unit-group) {
+  background: linear-gradient(180deg, rgba(148, 178, 209, 0.04), transparent 45%), var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px 16px;
+  margin: 16px 0;
+}
+main section:not(.unit-group) h2 {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+main section:not(.unit-group) section { box-shadow: none; margin: 12px 0; }
 
 /* ---------- editor (textarea + highlight mirror share exact metrics) ---------- */
 
@@ -333,7 +355,6 @@ textarea[readonly] { opacity: 0.7; }
 
 /* ---------- import ---------- */
 
-.import-unit { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
 .import-unit .imp-name { min-width: 220px; }
 .imp-status .warn { color: var(--failed); }
 
@@ -357,13 +378,13 @@ textarea[readonly] { opacity: 0.7; }
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 7px 12px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  margin-bottom: 6px;
+  padding: 9px 6px;
+  border-bottom: 1px solid var(--border);
+  margin: 0;
   flex-wrap: wrap;
-  background: var(--bg-raise);
 }
+.history-row:last-of-type { border-bottom: 0; }
+.history-row:hover { background: rgba(148, 178, 209, 0.04); }
 .hist-subject { flex: 1; min-width: 160px; }
 .history-row .actions { display: flex; gap: 6px; }
 #hist-view { margin-top: 10px; }
@@ -385,7 +406,7 @@ textarea[readonly] { opacity: 0.7; }
 .diff .diff-add { color: #35c948; }
 .diff .diff-del { color: #ef8a8a; }
 .diff .diff-ctx { color: var(--muted); }
-.logs { height: 320px; overflow-y: auto; }
+.logs { height: 340px; overflow-y: auto; background: #070b10; }
 
 .banner { border-radius: 10px; padding: 10px 14px; }
 .banner-warn { background: rgba(250, 178, 25, 0.1); border: 1px solid rgba(250, 178, 25, 0.45); }
@@ -430,4 +451,6 @@ body.readonly .chk { display: none !important; }
   header { padding: 8px 10px; }
   .hoststrip { order: 3; width: 100%; }
   .meter-block { max-width: none; }
+  main section:not(.unit-group) { padding: 12px; }
+  .detail-head h1 { font-size: 20px; }
 }
