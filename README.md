@@ -45,10 +45,14 @@ lose nothing — the files on disk *are* the state.
 - **Full lifecycle** — create, start, stop, restart, enable, disable, delete;
   every Quadlet kind (`.container`, `.pod`, `.network`, `.volume`, `.kube`,
   `.image`, `.build`) with starter templates.
+- **Pod composition** — pod cards roll up member state (per-member dots,
+  up/failed counts), member containers link to their pod, and the pod page
+  lists every unit that declares `Pod=`.
 - **Live logs** — `journalctl` streamed to the browser, follow mode.
 - **Rootless multi-user** — rootless Rookery manages your own
-  `~/.config/containers/systemd/`; rootful with `-users alice,bob` also
-  manages those users' sessions via `systemctl --user --machine`.
+  `~/.config/containers/systemd/`; rootful auto-discovers every user with a
+  Quadlet tree (or take control with `-users alice,bob` / `-users none`) and
+  manages their sessions via `systemctl --user --machine`.
 - **Git history & rollback** — with `-git`, every save/delete/rollback is a
   commit; per-revision diffs and one-click restore (re-validated before
   writing). It's plain git in the unit directory — fully usable without
@@ -62,8 +66,18 @@ lose nothing — the files on disk *are* the state.
   on the target beyond sshd and Podman.
 - **Image-update checks** — compare every unit's tag against the digest its
   registry serves (docker.io, ghcr.io, quay.io, …), flag drift, one-click
-  pull + restart. Digest-pinned images are correctly reported as unable to
-  drift.
+  pull + restart — on remote hosts too (podman over ssh). Digest-pinned
+  images are correctly reported as unable to drift, and the dangling images
+  updates leave behind get a one-click prune with reclaimable size shown.
+- **Failure alerts** — `-alerts ntfy://ntfy.sh/topic` (or
+  `telegram://BOT_TOKEN@CHAT_ID`, or any JSON webhook) notifies when a unit
+  enters or recovers from `failed`, with exit code and restart count.
+- **Read-only share links** — one click mints a 7-day link for a dashboard
+  view without the admin password: enforced GET-only on the server, no
+  secrets, no actions. Changing the password revokes all links.
+- **Secrets** — list `podman secret`s with the units that reference them,
+  create and delete from the browser (delete refuses while referenced);
+  the editor inserts `Secret=` lines from a picker. Values are write-only.
 - **Mobile-responsive** — passes the "restart it from the couch" test.
 - **One static binary** — amd64 + arm64, zero dependencies outside the Go
   standard library; the web UI is embedded vanilla JS, no Node toolchain.
@@ -89,10 +103,11 @@ manage alice's rootless units).
 | Flag | Env | Default | Meaning |
 |---|---|---|---|
 | `-listen` | `ROOKERY_LISTEN` | `127.0.0.1:7665` | listen address ("ROOK" on a phone keypad) |
-| `-users` | `ROOKERY_USERS` | — | extra users to manage (rootful only) |
+| `-users` | `ROOKERY_USERS` | auto-discover | rootless users to manage (rootful only); `none` disables |
 | `-password-file` | `ROOKERY_PASSWORD_FILE` | — | admin password file (or set `ROOKERY_PASSWORD`) |
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
 | `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...` |
+| `-alerts` | `ROOKERY_ALERTS` | — | failure alerts: `ntfy://host/topic`, `telegram://TOKEN@CHAT`, webhook URL |
 
 ### Install as a service
 
@@ -146,16 +161,20 @@ Design rules (from the [PRD](docs/PRD.md)):
 | `POST /api/units/{scope}/{name}/rollback` | `{"commit": ...}` — validate + restore |
 | `GET /api/updates` | digest drift for every container unit's image |
 | `POST /api/units/{scope}/{name}/update` | pull new image + restart |
-| `GET /api/gpus` | host GPU inventory |
+| `GET /api/gpus` | GPU inventory, local + every remote host |
 | `GET /api/host` | metrics, Podman info, scopes |
+| `GET/POST /api/secrets`, `DELETE /api/secrets/{name}` | podman secrets (write-only values) |
+| `GET /api/images/stale` / `POST /api/images/prune` | dangling-image count/size, prune |
+| `POST /api/share` | mint a 7-day read-only share token |
 | `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth |
 
 `{scope}` is `system`, a username, or a remote-host alias from `-remotes`.
 
-**Remote-scope limits (v1):** git history, SELinux hints, the GPU panel, and
-image updates apply to the local host only — the remote host's own Rookery
-(or SSH) covers those. Everything else — list, edit, validate, lifecycle,
-logs — works identically over ssh.
+**Remote-scope limits:** SELinux hints and podman secrets are local-host
+only. Everything else — list, edit, validate (remote generator), lifecycle,
+logs, git history/rollback (when the remote dir is already a repo; Rookery
+never git-inits another host), GPU panel, update checks and pulls — works
+identically over ssh.
 
 ## Development
 
@@ -171,12 +190,18 @@ under active dogfooding.
 
 ## Roadmap
 
-- **Polish**: optional `podlet` integration for edge-case conversions,
-  pod-level composition view, remote-host git/updates/GPU parity, automatic
-  rootless-user discovery.
-- **v2**: OIDC / multi-admin auth, read-only share links, alerting hooks
-  (ntfy/Telegram), secrets integration (`podman secret` + systemd
-  credentials).
+Shipped through v1.x: full Quadlet lifecycle, importer, git history,
+GPU panel, agentless multi-host with remote git/updates/GPU parity,
+rootless auto-discovery, pod composition view, image-update checks with
+stale-image pruning, failure alerts (ntfy/Telegram/webhook), read-only
+share links, and podman-secrets management.
+
+Deliberately not built: `podlet` integration (the native converter covers
+the common cases and warns about the rest; a binary dependency for edge
+cases isn't worth it — open an issue if you hit a real gap).
+
+- **v2**: OIDC / multi-admin auth, systemd credentials alongside podman
+  secrets, pod-level log interleaving.
 
 ## License
 
