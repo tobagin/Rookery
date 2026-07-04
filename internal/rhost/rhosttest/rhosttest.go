@@ -38,4 +38,11 @@ exec sh -c "$*"
 	old := rhost.SSHCommand
 	rhost.SSHCommand = []string{shim, "-o", "BatchMode=yes"}
 	t.Cleanup(func() { rhost.SSHCommand = old })
+
+	// The "remote host" is this machine, which may have podman installed
+	// (Fedora dev boxes, current GitHub runners). Pin the generator probe to
+	// nothing so validation deterministically degrades to unavailable.
+	oldGen := rhost.GeneratorCandidates
+	rhost.GeneratorCandidates = []string{"/nonexistent/rookery-test-quadlet"}
+	t.Cleanup(func() { rhost.GeneratorCandidates = oldGen })
 }

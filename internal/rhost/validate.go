@@ -10,6 +10,17 @@ import (
 
 const noGenMarker = "__ROOKERY_NO_GENERATOR__"
 
+// GeneratorCandidates lists the remote paths probed for the Quadlet
+// generator. Package variable so the test shim — whose "remote host" is the
+// local machine, which may itself have podman installed — can point it at
+// nothing.
+var GeneratorCandidates = []string{
+	"/usr/lib/systemd/system-generators/podman-system-generator",
+	"/usr/lib/systemd/user-generators/podman-user-generator",
+	"/usr/libexec/podman/quadlet",
+	"/usr/lib/podman/quadlet",
+}
+
 // ValidateRemote dry-runs content through the REMOTE host's own Quadlet
 // generator — the same "validate with the Podman that will actually run
 // this" rule as locally, which matters when hosts run different Podman
@@ -19,16 +30,20 @@ func ValidateRemote(ctx context.Context, target string, userScope bool, name, co
 	if userScope {
 		userFlag = " -user"
 	}
+	candidates := make([]string, len(GeneratorCandidates))
+	for i, c := range GeneratorCandidates {
+		candidates[i] = Quote(c)
+	}
 	script := fmt.Sprintf(`d=$(mktemp -d) || exit 125
 trap 'rm -rf "$d"' EXIT
 cat > "$d"/%s || exit 125
 g=''
-for c in /usr/lib/systemd/system-generators/podman-system-generator /usr/lib/systemd/user-generators/podman-user-generator /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do
+for c in %s; do
   if [ -x "$c" ]; then g="$c"; break; fi
 done
 if [ -z "$g" ]; then echo %s; exit 0; fi
 QUADLET_UNIT_DIRS="$d" "$g" -dryrun%s 2>&1`,
-		Quote(name), noGenMarker, userFlag)
+		Quote(name), strings.Join(candidates, " "), noGenMarker, userFlag)
 
 	out, err := Run(ctx, target, script, []byte(content))
 	output := strings.TrimSpace(out)
