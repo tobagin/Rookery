@@ -20,6 +20,10 @@ Volume=/etc/containers/systemd:/etc/containers/systemd
 Volume=/run/systemd:/run/systemd
 Volume=/var/log/journal:/var/log/journal:ro
 Volume=/run/podman/podman.sock:/run/podman/podman.sock:ro
+# The HOST's quadlet generator, so validation matches the Podman that will
+# actually run the units (Fedora/RHEL path — adjust for other distros).
+# Without it, validation degrades to "unavailable" but everything else works.
+Volume=/usr/libexec/podman/quadlet:/usr/libexec/podman/quadlet:ro
 SecurityLabelDisable=true
 
 [Service]

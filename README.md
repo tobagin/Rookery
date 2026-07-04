@@ -97,9 +97,13 @@ manage alice's rootless units).
 ### Install as a service
 
 [packaging/rookery.service](packaging/rookery.service) is a plain systemd
-unit for the binary. Or dogfood it:
-[packaging/rookery.container](packaging/rookery.container) runs Rookery
-itself as a Quadlet.
+unit for the binary — the simplest install.
+
+Or run the image (amd64 + arm64, published from CI):
+[packaging/rookery.container](packaging/rookery.container) runs
+`ghcr.io/tobagin/rookery` as a Quadlet, dogfooding Rookery on itself. The
+container needs the host mounts listed there (unit dirs, `/run/systemd`,
+journal, Podman socket, and the host's quadlet generator for validation).
 
 ## Architecture
 
