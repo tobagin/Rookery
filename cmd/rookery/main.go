@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"os/user"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +30,7 @@ var version = "dev"
 func main() {
 	// 7665 spells ROOK on a phone keypad; 7878 collided with Radarr.
 	listen := flag.String("listen", envOr("ROOKERY_LISTEN", "127.0.0.1:7665"), "address to listen on")
-	users := flag.String("users", envOr("ROOKERY_USERS", ""), "comma-separated users whose rootless quadlets to manage (rootful only)")
+	users := flag.String("users", envOr("ROOKERY_USERS", ""), `comma-separated users whose rootless quadlets to manage (rootful only); empty auto-discovers users with a ~/.config/containers/systemd tree, "none" disables`)
 	passwordFile := flag.String("password-file", envOr("ROOKERY_PASSWORD_FILE", ""), "file containing the admin password (or set ROOKERY_PASSWORD)")
 	gitFlag := flag.Bool("git", envOr("ROOKERY_GIT", "") == "1" || envOr("ROOKERY_GIT", "") == "true",
 		"track unit directories in git: commit on save, history, rollback (auto-enabled for dirs that are already repositories)")
@@ -54,12 +56,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	attachGit(areas, *gitFlag)
 	remoteAreasList, err := remoteAreas(*remotes)
 	if err != nil {
 		log.Fatal(err)
 	}
 	areas = append(areas, remoteAreasList...)
+	attachGit(areas, *gitFlag)
 
 	srv := server.New(server.Options{
 		Areas:    areas,
@@ -78,16 +80,23 @@ func main() {
 }
 
 // detectAreas picks which Quadlet trees this instance manages: rootful
-// manages the system tree plus any -users sessions; rootless manages only
-// the invoking user's own tree.
+// manages the system tree plus rootless user sessions — those named by
+// -users, or, when the flag is empty, every user with an existing
+// ~/.config/containers/systemd tree ("none" disables). Rootless manages
+// only the invoking user's own tree.
 func detectAreas(usersFlag string) ([]server.Area, error) {
 	if os.Geteuid() == 0 {
 		areas := []server.Area{{Label: "system", Scope: systemd.Scope{}, Dirs: quadlet.SystemDirs()}}
-		for _, name := range strings.Split(usersFlag, ",") {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
+		names := splitList(usersFlag)
+		if usersFlag == "" {
+			names = discoverQuadletUsers("/etc/passwd")
+			if len(names) > 0 {
+				log.Printf("auto-discovered rootless quadlet users: %s (pass -users to override, -users none to disable)", strings.Join(names, ", "))
 			}
+		} else if usersFlag == "none" {
+			names = nil
+		}
+		for _, name := range names {
 			u, err := user.Lookup(name)
 			if err != nil {
 				return nil, fmt.Errorf("-users: %w", err)
@@ -112,6 +121,41 @@ func detectAreas(usersFlag string) ([]server.Area, error) {
 		Scope: systemd.Scope{User: u.Username},
 		Dirs:  quadlet.UserDirs(u.HomeDir),
 	}}, nil
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// discoverQuadletUsers scans passwd for human accounts (uid >= 1000, not
+// nobody) whose ~/.config/containers/systemd directory exists. NSS-only
+// users (LDAP etc.) are not seen — name them with -users instead.
+func discoverQuadletUsers(passwdPath string) []string {
+	data, err := os.ReadFile(passwdPath)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Split(line, ":")
+		if len(f) < 6 {
+			continue
+		}
+		uid, err := strconv.Atoi(f[2])
+		if err != nil || uid < 1000 || uid == 65534 {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(f[5], ".config", "containers", "systemd")); err == nil && st.IsDir() {
+			names = append(names, f[0])
+		}
+	}
+	return names
 }
 
 func envOr(key, fallback string) string {
@@ -158,15 +202,22 @@ func remoteAreas(spec string) ([]server.Area, error) {
 }
 
 // attachGit opens (or with force, initializes) a git repository in each
-// LOCAL area's primary directory. Directories that already are
+// local area's primary directory. Directories that already are
 // repositories get history tracking even without -git; plain directories
-// are left alone unless the flag asks for them.
+// are left alone unless the flag asks for them. Remote areas get history
+// only when the directory is already a repository over there — Rookery
+// never git-inits someone else's host.
 func attachGit(areas []server.Area, force bool) {
 	for i := range areas {
+		var store *gitstore.Store
+		var err error
 		if areas[i].Remote() {
-			continue
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			store, err = gitstore.OpenRemote(ctx, areas[i].Scope.SSH, areas[i].Dirs[0])
+			cancel()
+		} else {
+			store, err = gitstore.Open(areas[i].Dirs[0], force)
 		}
-		store, err := gitstore.Open(areas[i].Dirs[0], force)
 		switch {
 		case err == nil:
 			areas[i].Git = store

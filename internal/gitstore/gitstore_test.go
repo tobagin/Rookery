@@ -6,7 +6,54 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tobagin/rookery/internal/rhost/rhosttest"
 )
+
+// TestRemoteStore drives the same git operations through the ssh shim: the
+// "remote host" is this machine, so this exercises the full quoting path.
+func TestRemoteStore(t *testing.T) {
+	rhosttest.InstallShim(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	if _, err := OpenRemote(ctx, "fake", dir); !errors.Is(err, ErrNotRepo) {
+		t.Fatalf("OpenRemote(plain dir) = %v, want ErrNotRepo (never git-init a remote host)", err)
+	}
+
+	local, err := Open(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x.container"), []byte("[Container]\nImage=a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.CommitFile(ctx, "x.container", "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	remote, err := OpenRemote(ctx, "fake", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x.container"), []byte("[Container]\nImage=b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.CommitFile(ctx, "x.container", "update over ssh"); err != nil {
+		t.Fatal(err)
+	}
+	hist, err := remote.History(ctx, "x.container", 10)
+	if err != nil || len(hist) != 2 {
+		t.Fatalf("History = %v, %v; want 2 commits", hist, err)
+	}
+	if hist[0].Subject != "update over ssh" {
+		t.Errorf("newest subject = %q", hist[0].Subject)
+	}
+	content, err := remote.Show(ctx, hist[1].Hash, "x.container")
+	if err != nil || content != "[Container]\nImage=a\n" {
+		t.Errorf("Show(first) = %q, %v", content, err)
+	}
+}
 
 func TestOpenPlainDirWithoutCreate(t *testing.T) {
 	if _, err := Open(t.TempDir(), false); !errors.Is(err, ErrNotRepo) {

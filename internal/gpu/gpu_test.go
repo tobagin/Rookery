@@ -72,3 +72,28 @@ func TestDetectDRM(t *testing.T) {
 		t.Errorf("nvidia fallback = %+v", devices[2])
 	}
 }
+
+func TestParseRemoteProbe(t *testing.T) {
+	out := `0, NVIDIA T400, 2048, 100, 3
+__ROOKERY_DRM__
+card0|0x10de|||
+card1|0x1002|2147483648|1073741824|42
+card1-HDMI-A-1|0x1002|||
+`
+	devices := ParseRemoteProbe(out)
+	if len(devices) != 2 {
+		t.Fatalf("got %d devices (%+v), want 2 (nvidia deduped by smi)", len(devices), devices)
+	}
+	if devices[0].Vendor != "nvidia" || devices[0].Name != "NVIDIA T400" || devices[0].MemoryTotalMB != 2048 {
+		t.Errorf("smi device = %+v", devices[0])
+	}
+	if devices[1].Vendor != "amd" || devices[1].MemoryTotalMB != 2048 || devices[1].UtilizationPct != 42 {
+		t.Errorf("amd device = %+v", devices[1])
+	}
+
+	// No nvidia-smi on the remote host: the DRM fallback keeps the card.
+	noSMI := ParseRemoteProbe("\n__ROOKERY_DRM__\ncard0|0x10de|||\n")
+	if len(noSMI) != 1 || noSMI[0].Vendor != "nvidia" || noSMI[0].MemoryTotalMB != -1 {
+		t.Errorf("fallback = %+v", noSMI)
+	}
+}

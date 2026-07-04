@@ -20,6 +20,7 @@ type Device struct {
 	Index          int    `json:"index"`
 	Vendor         string `json:"vendor"` // nvidia, amd, intel
 	Name           string `json:"name"`
+	Host           string `json:"host,omitempty"` // remote-area label; empty = local
 	MemoryTotalMB  int    `json:"memoryTotalMb"`  // -1 unknown
 	MemoryUsedMB   int    `json:"memoryUsedMb"`   // -1 unknown
 	UtilizationPct int    `json:"utilizationPct"` // -1 unknown
@@ -96,41 +97,74 @@ func detectDRM(root string) []Device {
 			continue // connector entries like card0-HDMI-A-1
 		}
 		dev := filepath.Join(card, "device")
-		vendorID := strings.TrimSpace(readFile(filepath.Join(dev, "vendor")))
-		idx := atoiOr(strings.TrimPrefix(base, "card"), 0)
-		switch vendorID {
-		case "0x1002": // AMD
-			d := Device{
-				Index:          idx,
-				Vendor:         "amd",
-				Name:           "AMD GPU (" + base + ")",
-				MemoryTotalMB:  bytesToMB(readFile(filepath.Join(dev, "mem_info_vram_total"))),
-				MemoryUsedMB:   bytesToMB(readFile(filepath.Join(dev, "mem_info_vram_used"))),
-				UtilizationPct: atoiOr(strings.TrimSpace(readFile(filepath.Join(dev, "gpu_busy_percent"))), -1),
-			}
+		d, ok := fromDRM(base,
+			readFile(filepath.Join(dev, "vendor")),
+			readFile(filepath.Join(dev, "mem_info_vram_total")),
+			readFile(filepath.Join(dev, "mem_info_vram_used")),
+			readFile(filepath.Join(dev, "gpu_busy_percent")))
+		if ok {
 			devices = append(devices, d)
-		case "0x8086": // Intel
-			devices = append(devices, Device{
-				Index:          idx,
-				Vendor:         "intel",
-				Name:           "Intel GPU (" + base + ")",
-				MemoryTotalMB:  -1,
-				MemoryUsedMB:   -1,
-				UtilizationPct: -1,
-			})
-		case "0x10de": // NVIDIA — presence only, metrics need nvidia-smi
-			devices = append(devices, Device{
-				Index:          idx,
-				Vendor:         "nvidia",
-				Name:           "NVIDIA GPU (" + base + ")",
-				MemoryTotalMB:  -1,
-				MemoryUsedMB:   -1,
-				UtilizationPct: -1,
-			})
 		}
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].Index < devices[j].Index })
 	return devices
+}
+
+// fromDRM builds a Device from raw sysfs values, shared by the local walk
+// and the remote probe parser.
+func fromDRM(base, vendorID, vramTotal, vramUsed, busy string) (Device, bool) {
+	idx := atoiOr(strings.TrimPrefix(base, "card"), 0)
+	switch strings.TrimSpace(vendorID) {
+	case "0x1002": // AMD
+		return Device{
+			Index:          idx,
+			Vendor:         "amd",
+			Name:           "AMD GPU (" + base + ")",
+			MemoryTotalMB:  bytesToMB(vramTotal),
+			MemoryUsedMB:   bytesToMB(vramUsed),
+			UtilizationPct: atoiOr(strings.TrimSpace(busy), -1),
+		}, true
+	case "0x8086": // Intel
+		return Device{Index: idx, Vendor: "intel", Name: "Intel GPU (" + base + ")",
+			MemoryTotalMB: -1, MemoryUsedMB: -1, UtilizationPct: -1}, true
+	case "0x10de": // NVIDIA — presence only, metrics need nvidia-smi
+		return Device{Index: idx, Vendor: "nvidia", Name: "NVIDIA GPU (" + base + ")",
+			MemoryTotalMB: -1, MemoryUsedMB: -1, UtilizationPct: -1}, true
+	}
+	return Device{}, false
+}
+
+// RemoteProbeScript inspects a remote host's GPUs in one POSIX shell round
+// trip: nvidia-smi CSV (when present), a marker, then one |-separated sysfs
+// line per DRM card. ParseRemoteProbe reads its output.
+const RemoteProbeScript = `nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu --format=csv,noheader,nounits 2>/dev/null
+echo __ROOKERY_DRM__
+for c in /sys/class/drm/card[0-9]*; do
+  [ -e "$c/device/vendor" ] || continue
+  echo "$(basename "$c")|$(cat "$c/device/vendor" 2>/dev/null)|$(cat "$c/device/mem_info_vram_total" 2>/dev/null)|$(cat "$c/device/mem_info_vram_used" 2>/dev/null)|$(cat "$c/device/gpu_busy_percent" 2>/dev/null)"
+done`
+
+// ParseRemoteProbe turns RemoteProbeScript output into devices, with the
+// same nvidia-smi-wins-over-sysfs dedup as local Detect.
+func ParseRemoteProbe(out string) []Device {
+	smiPart, drmPart, _ := strings.Cut(out, "__ROOKERY_DRM__")
+	devices := ParseNvidiaSMI(smiPart)
+	haveSMI := len(devices) > 0
+	var drm []Device
+	for _, line := range strings.Split(drmPart, "\n") {
+		f := strings.Split(strings.TrimSpace(line), "|")
+		if len(f) != 5 || strings.Contains(f[0], "-") {
+			continue
+		}
+		if d, ok := fromDRM(f[0], f[1], f[2], f[3], f[4]); ok {
+			if d.Vendor == "nvidia" && haveSMI {
+				continue
+			}
+			drm = append(drm, d)
+		}
+	}
+	sort.Slice(drm, func(i, j int) bool { return drm[i].Index < drm[j].Index })
+	return append(devices, drm...)
 }
 
 func readFile(path string) string {

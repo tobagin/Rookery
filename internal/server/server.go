@@ -14,6 +14,7 @@ import (
 	"github.com/tobagin/rookery/internal/podman"
 	"github.com/tobagin/rookery/internal/quadlet"
 	"github.com/tobagin/rookery/internal/registry"
+	"github.com/tobagin/rookery/internal/rhost"
 	"github.com/tobagin/rookery/internal/systemd"
 	"github.com/tobagin/rookery/web"
 )
@@ -77,37 +78,49 @@ type Options struct {
 	// ResolveDigest fetches an image tag's current registry digest;
 	// nil -> a real registry client. Injectable for tests.
 	ResolveDigest func(ctx context.Context, image string) (string, error)
+	// RemoteDigests / RemotePull / RemoteGPUs run the remote-host halves of
+	// update checks and GPU inventory; nil -> rhost over ssh. Injectable
+	// for tests.
+	RemoteDigests func(ctx context.Context, target string, userSession bool, image string) ([]string, error)
+	RemotePull    func(ctx context.Context, target string, userSession bool, image string) error
+	RemoteGPUs    func(ctx context.Context, target string) []gpu.Device
 }
 
 // Server routes API and UI requests.
 type Server struct {
-	areas    []Area
-	sysd     Systemd
-	validate ValidateFunc
-	pod      Podman
-	resolve  func(ctx context.Context, image string) (string, error)
-	version  string
-	password string
-	selinux  func() bool
-	gpus     func(ctx context.Context) []gpu.Device
-	sess     *sessions
-	mux      *http.ServeMux
+	areas         []Area
+	sysd          Systemd
+	validate      ValidateFunc
+	pod           Podman
+	resolve       func(ctx context.Context, image string) (string, error)
+	remoteDigests func(ctx context.Context, target string, userSession bool, image string) ([]string, error)
+	remotePull    func(ctx context.Context, target string, userSession bool, image string) error
+	remoteGPUs    func(ctx context.Context, target string) []gpu.Device
+	version       string
+	password      string
+	selinux       func() bool
+	gpus          func(ctx context.Context) []gpu.Device
+	sess          *sessions
+	mux           *http.ServeMux
 }
 
 // New builds the Server and its routes.
 func New(opts Options) *Server {
 	s := &Server{
-		areas:    opts.Areas,
-		sysd:     opts.Systemd,
-		validate: opts.Validate,
-		pod:      opts.Podman,
-		version:  opts.Version,
-		password: opts.Password,
-		selinux:  opts.SELinux,
-		gpus:     opts.GPUs,
-		resolve:  opts.ResolveDigest,
-		sess:     newSessions(),
-		mux:      http.NewServeMux(),
+		areas:         opts.Areas,
+		sysd:          opts.Systemd,
+		validate:      opts.Validate,
+		pod:           opts.Podman,
+		version:       opts.Version,
+		password:      opts.Password,
+		selinux:       opts.SELinux,
+		gpus:          opts.GPUs,
+		resolve:       opts.ResolveDigest,
+		remoteDigests: opts.RemoteDigests,
+		remotePull:    opts.RemotePull,
+		remoteGPUs:    opts.RemoteGPUs,
+		sess:          newSessions(),
+		mux:           http.NewServeMux(),
 	}
 	if s.validate == nil {
 		s.validate = quadlet.Validate
@@ -120,6 +133,21 @@ func New(opts Options) *Server {
 	}
 	if s.resolve == nil {
 		s.resolve = registry.NewClient().ResolveDigest
+	}
+	if s.remoteDigests == nil {
+		s.remoteDigests = rhost.ImageDigests
+	}
+	if s.remotePull == nil {
+		s.remotePull = rhost.PullImage
+	}
+	if s.remoteGPUs == nil {
+		s.remoteGPUs = func(ctx context.Context, target string) []gpu.Device {
+			out, err := rhost.Run(ctx, target, gpu.RemoteProbeScript, nil)
+			if err != nil && out == "" {
+				return nil
+			}
+			return gpu.ParseRemoteProbe(out)
+		}
 	}
 	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)

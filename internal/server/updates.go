@@ -19,22 +19,20 @@ type updateRow struct {
 	Note            string `json:"note,omitempty"`
 }
 
-// handleUpdates checks every local container unit's image tag against its
-// registry: an update is available when none of the locally stored digests
-// match what the registry serves for the tag today. Remote areas are
-// skipped — their image store lives on the other host.
+// handleUpdates checks every container unit's image tag against its
+// registry: an update is available when none of the digests stored on the
+// unit's host — local Podman API, or podman over ssh for remote areas —
+// match what the registry serves for the tag today.
 func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
-	if s.pod == nil {
-		httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
-		return
-	}
 	type job struct {
-		scope, name, image string
+		area  Area
+		name  string
+		image string
 	}
 	var jobs []job
 	skippedScopes := []string{}
 	for _, area := range s.areas {
-		if area.Remote() {
+		if !area.Remote() && s.pod == nil {
 			skippedScopes = append(skippedScopes, area.Label)
 			continue
 		}
@@ -54,20 +52,24 @@ func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
 			if !ok || image == "" {
 				continue
 			}
-			jobs = append(jobs, job{scope: area.Label, name: d.unit.Name, image: image})
+			jobs = append(jobs, job{area: area, name: d.unit.Name, image: image})
 		}
+	}
+	if len(jobs) == 0 && len(skippedScopes) == len(s.areas) && s.pod == nil {
+		httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
+		return
 	}
 
 	rows := make([]updateRow, len(jobs))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4) // don't hammer registries
+	sem := make(chan struct{}, 4) // don't hammer registries or ssh targets
 	for i, j := range jobs {
 		wg.Add(1)
 		go func(i int, j job) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			rows[i] = s.checkDrift(r.Context(), j.scope, j.name, j.image)
+			rows[i] = s.checkDrift(r.Context(), j.area, j.name, j.image)
 		}(i, j)
 	}
 	wg.Wait()
@@ -78,8 +80,16 @@ func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) checkDrift(ctx context.Context, scope, name, image string) updateRow {
-	row := updateRow{Scope: scope, Name: name, Image: image}
+// hostDigests returns the digests the unit's own host stores for image.
+func (s *Server) hostDigests(ctx context.Context, area Area, image string) ([]string, error) {
+	if area.Remote() {
+		return s.remoteDigests(ctx, area.Scope.SSH, area.Scope.User != "", image)
+	}
+	return s.pod.ImageDigests(ctx, image)
+}
+
+func (s *Server) checkDrift(ctx context.Context, area Area, name, image string) updateRow {
+	row := updateRow{Scope: area.Label, Name: name, Image: image}
 	if strings.HasSuffix(image, ".image") || strings.HasSuffix(image, ".build") {
 		row.Note = "image comes from another unit; not checked"
 		return row
@@ -94,9 +104,9 @@ func (s *Server) checkDrift(ctx context.Context, scope, name, image string) upda
 		return row
 	}
 	row.RemoteDigest = remote
-	local, err := s.pod.ImageDigests(ctx, image)
+	local, err := s.hostDigests(ctx, area, image)
 	if err != nil {
-		row.Note = "image not in local store: " + err.Error()
+		row.Note = "image not in host store: " + err.Error()
 		return row
 	}
 	row.UpdateAvailable = true
@@ -120,11 +130,7 @@ func (s *Server) handleUpdateUnit(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, "unit file not found")
 		return
 	}
-	if area.Remote() {
-		httpError(w, http.StatusNotImplemented, "updating images on remote hosts is not supported yet — run the update on that host")
-		return
-	}
-	if s.pod == nil {
+	if !area.Remote() && s.pod == nil {
 		httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
 		return
 	}
@@ -143,7 +149,12 @@ func (s *Server) handleUpdateUnit(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnprocessableEntity, "unit has no Image= to pull")
 		return
 	}
-	if err := s.pod.PullImage(r.Context(), image); err != nil {
+	if area.Remote() {
+		err = s.remotePull(r.Context(), area.Scope.SSH, area.Scope.User != "", image)
+	} else {
+		err = s.pod.PullImage(r.Context(), image)
+	}
+	if err != nil {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}

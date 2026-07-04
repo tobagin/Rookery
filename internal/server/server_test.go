@@ -129,6 +129,29 @@ func TestListUnits(t *testing.T) {
 	}
 }
 
+func TestListUnitsPodMembership(t *testing.T) {
+	srv, _, dir := newTestServer(t, okValidator)
+	pod := "[Pod]\nPublishPort=2283:2283\n"
+	member := "[Container]\nImage=ghcr.io/immich-app/server:release\nPod=immich.pod\n"
+	for name, content := range map[string]string{"immich.pod": pod, "immich-server.container": member} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, body := doJSON(t, srv, "GET", "/api/units", "")
+	pods := map[string]string{}
+	for _, raw := range body["units"].([]any) {
+		u := raw.(map[string]any)
+		pods[u["name"].(string)], _ = u["pod"].(string)
+	}
+	if pods["immich-server.container"] != "immich.pod" {
+		t.Errorf("member pod ref = %q, want immich.pod", pods["immich-server.container"])
+	}
+	if pods["jellyfin.container"] != "" {
+		t.Errorf("standalone container has pod ref %q", pods["jellyfin.container"])
+	}
+}
+
 func TestListUnitsSystemdDown(t *testing.T) {
 	srv, sysd, _ := newTestServer(t, okValidator)
 	sysd.err = fmt.Errorf("dbus is on fire")

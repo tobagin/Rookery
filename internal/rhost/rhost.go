@@ -176,6 +176,31 @@ func SortedNames(files map[string][]byte) []string {
 	return names
 }
 
+// ImageDigests returns the RepoDigests the remote host's podman stores for
+// image — the remote counterpart of the local Podman API lookup that drives
+// update checks.
+func ImageDigests(ctx context.Context, target string, userSession bool, image string) ([]string, error) {
+	script := Script(userSession, []string{
+		"podman", "image", "inspect", "--format", "{{range .RepoDigests}}{{println .}}{{end}}", image})
+	out, err := Run(ctx, target, script, nil)
+	if err != nil {
+		return nil, err
+	}
+	var digests []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			digests = append(digests, l)
+		}
+	}
+	return digests, nil
+}
+
+// PullImage pulls image on the remote host.
+func PullImage(ctx context.Context, target string, userSession bool, image string) error {
+	_, err := Run(ctx, target, Script(userSession, []string{"podman", "pull", "-q", image}), nil)
+	return err
+}
+
 // Probe identifies the ssh account on target: uid decides whether Rookery
 // manages the system Quadlet tree or the account's rootless one.
 func Probe(ctx context.Context, target string) (uid int, home, user string, err error) {

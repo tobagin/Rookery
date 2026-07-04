@@ -234,6 +234,7 @@ async function gpuPanelHTML() {
         ? Math.round(100 * d.memoryUsedMb / d.memoryTotalMb) : null;
       return `<div class="gpu-row">
         <span class="badge badge-gpu">${esc(d.vendor)}</span>
+        ${d.host ? `<span class="badge badge-user" title="on remote host ${esc(d.host)}">${esc(d.host)}</span>` : ""}
         <span class="gpu-name">${esc(d.name)}</span>
         ${d.utilizationPct >= 0 ? meter("util", d.utilizationPct, d.utilizationPct + "%") : ""}
         ${memPct != null ? meter("vram", memPct, memText) : ""}
@@ -264,6 +265,13 @@ async function renderDashboard() {
   const units = body.units || [];
   const groups = { failed: [], running: [], pending: [], stopped: [], unknown: [] };
   units.forEach(u => groups[stateClass(u)].push(u));
+
+  // Pod composition: containers with Pod= are members of a pod unit in the
+  // same scope; the pod card rolls up their state.
+  podMembers = {};
+  units.forEach(u => {
+    if (u.pod) (podMembers[`${u.scope}/${u.pod}`] ||= []).push(u);
+  });
 
   const scopeErrors = Object.entries(body.scopeErrors || {})
     .map(([s, e]) => `<p class="banner banner-warn">scope <b>${esc(s)}</b>: ${esc(e)}</p>`).join("");
@@ -356,10 +364,24 @@ async function renderDashboard() {
   });
 }
 
+let podMembers = {};
+
+// podSummary rolls a pod's member states into one line for the pod card.
+function podSummary(u) {
+  const members = podMembers[`${u.scope}/${u.name}`] || [];
+  if (!members.length) return "";
+  const bad = members.filter(m => stateClass(m) === "failed").length;
+  const up = members.filter(m => stateClass(m) === "running").length;
+  return `<span class="pod-summary">${members.map(m =>
+    `<span class="dot ${stateClass(m)}" title="${esc(m.name)}: ${esc(stateLabel(m))}"></span>`).join("")}
+    ${up}/${members.length} members up${bad ? ` · <b class="warn-text">${bad} failed</b>` : ""}</span>`;
+}
+
 function card(u) {
   const cls = stateClass(u);
   const canStart = cls === "stopped" || cls === "failed";
   const loop = u.restarts > 0 && (cls === "failed" || u.sub === "auto-restart");
+  const podSum = u.kind === "pod" ? podSummary(u) : "";
   return `
   <a class="card ${cls}" href="#/unit/${encodeURIComponent(u.scope)}/${encodeURIComponent(u.name)}"
      data-name="${esc(u.name.toLowerCase())}" data-sub="${esc(((u.description || "") + " " + (u.image || "")).toLowerCase())}">
@@ -369,10 +391,11 @@ function card(u) {
       <span class="badge">${esc(u.kind)}</span>
       ${u.scope !== "system" ? `<span class="badge badge-user" title="rootless unit of ${esc(u.scope)}">${esc(u.scope)}</span>` : ""}
       ${loop ? `<span class="badge badge-loop" title="service restarted ${u.restarts} times — likely a crash loop">↻${u.restarts}</span>` : ""}
+      ${u.pod ? `<span class="badge" title="member of ${esc(u.pod)}">${esc(u.pod.replace(/\.pod$/, ""))} pod</span>` : ""}
       ${u.gpus && u.gpus.length ? `<span class="badge badge-gpu" title="${esc(u.gpus.join(", "))}">gpu</span>` : ""}
       ${updateInfo[`${u.scope}/${u.name}`]?.updateAvailable ? `<span class="badge badge-update" title="registry serves a newer digest for ${esc(u.image)}">update</span>` : ""}
     </div>
-    <div class="card-sub">${esc(u.description || u.image || "")}</div>
+    <div class="card-sub">${podSum || esc(u.description || u.image || "")}</div>
     <div class="card-foot">
       <span class="state">${esc(stateLabel(u))}</span>
       <span class="actions">
@@ -421,6 +444,7 @@ async function renderUnit(scope, name) {
       <span class="badge">${esc(unit.kind)}</span>
       ${scope !== "system" ? `<span class="badge badge-user">${esc(scope)}</span>` : ""}
       ${loop ? `<span class="badge badge-loop" title="restart count since last stop">↻${unit.restarts}</span>` : ""}
+      ${unit.pod ? `<a class="badge badge-user" href="#/unit/${encodeURIComponent(scope)}/${encodeURIComponent(unit.pod)}" title="open the pod unit">member of ${esc(unit.pod)}</a>` : ""}
       ${(unit.gpus || []).map(g => `<span class="badge badge-gpu">${esc(g)}</span>`).join("")}
       <span class="state">${esc(stateLabel(unit))}${unit.unitFile ? " · " + esc(unit.unitFile) : ""}</span>
     </div>
@@ -435,6 +459,10 @@ async function renderUnit(scope, name) {
         `<button class="btn" data-act="${a}">${a}</button>`).join("")}
       <button class="btn btn-danger" data-act="delete">delete</button>
     </div>
+    ${unit.kind === "pod" ? `<section>
+      <h2>Members</h2>
+      <div id="pod-members" class="grid"><p class="muted">loading…</p></div>
+    </section>` : ""}
     <section>
       <h2>Unit file</h2>
       <textarea id="editor" spellcheck="false" ${unit.readOnly ? "readonly" : ""}>${esc(content)}</textarea>
@@ -569,6 +597,16 @@ async function renderUnit(scope, name) {
         toast("CDI attachment added — requires nvidia-container-toolkit with generated CDI specs on the host");
       }
     });
+  }
+
+  const $members = document.getElementById("pod-members");
+  if ($members) {
+    api("/api/units").then(({ body }) => {
+      const members = (body.units || []).filter(u => u.scope === scope && u.pod === name);
+      $members.innerHTML = members.length
+        ? members.map(card).join("")
+        : `<p class="muted">No container units declare <code>Pod=${esc(name)}</code> yet.</p>`;
+    }).catch(() => { $members.innerHTML = ""; });
   }
 
   loadHistory(scope, name, () => $editor.value);

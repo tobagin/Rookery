@@ -2,12 +2,15 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/tobagin/rookery/internal/convert"
 	"github.com/tobagin/rookery/internal/hostinfo"
@@ -27,6 +30,7 @@ type unitJSON struct {
 	ReadOnly    bool     `json:"readOnly"`
 	Description string   `json:"description,omitempty"`
 	Image       string   `json:"image,omitempty"`
+	Pod         string   `json:"pod,omitempty"` // Pod= reference, e.g. "immich.pod"
 	Load        string   `json:"load"`
 	Active      string   `json:"active"`
 	Sub         string   `json:"sub"`
@@ -78,6 +82,7 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 			if f, err := quadlet.Parse(d.data); d.data != nil && err == nil {
 				uj.Description, _ = f.Get("Unit", "Description")
 				uj.Image, _ = f.Get(sectionForKind(d.unit.Kind), "Image")
+				uj.Pod, _ = f.Get("Container", "Pod")
 				uj.GPUs = quadlet.GPURefs(f)
 			}
 			out = append(out, uj)
@@ -166,6 +171,7 @@ func (s *Server) handleGetUnit(w http.ResponseWriter, r *http.Request) {
 	if f, err := quadlet.Parse(data); err == nil {
 		uj.Description, _ = f.Get("Unit", "Description")
 		uj.Image, _ = f.Get(sectionForKind(quadlet.KindFromName(name)), "Image")
+		uj.Pod, _ = f.Get("Container", "Pod")
 		uj.GPUs = quadlet.GPURefs(f)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"unit": uj, "content": string(data)})
@@ -580,8 +586,35 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	// Request context cancellation kills journalctl and ends the scan.
 }
 
+// handleGPUs inventories local GPUs plus one ssh probe per distinct remote
+// target, labeled with the area so the panel says whose card it is. A slow
+// or dead host times out rather than hanging the panel.
 func (s *Server) handleGPUs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"devices": s.gpus(r.Context())})
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	devices := s.gpus(ctx)
+	seen := map[string]bool{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, a := range s.areas {
+		if !a.Remote() || seen[a.Scope.SSH] {
+			continue
+		}
+		seen[a.Scope.SSH] = true
+		wg.Add(1)
+		go func(label, target string) {
+			defer wg.Done()
+			remote := s.remoteGPUs(ctx, target)
+			mu.Lock()
+			defer mu.Unlock()
+			for _, d := range remote {
+				d.Host = label
+				devices = append(devices, d)
+			}
+		}(a.Label, a.Scope.SSH)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
 }
 
 func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {

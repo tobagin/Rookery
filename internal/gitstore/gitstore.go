@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/tobagin/rookery/internal/rhost"
 )
 
 // ErrNotRepo reports a directory that isn't under git (and creation wasn't
@@ -28,9 +30,11 @@ type Commit struct {
 
 var hashRe = regexp.MustCompile(`^[0-9a-f]{4,40}$`)
 
-// Store operates on one directory's repository.
+// Store operates on one directory's repository. With ssh set, every git
+// invocation runs on that remote host instead of locally.
 type Store struct {
 	dir string
+	ssh string
 }
 
 // Open returns a Store for dir. With create, a repository is initialized
@@ -60,6 +64,22 @@ func Open(dir string, create bool) (*Store, error) {
 	return s, nil
 }
 
+// OpenRemote returns a Store for a directory on an ssh target. It never
+// initializes a repository on the remote host — history is enabled only
+// when the directory is already tracked there; anything else (no git, no
+// repo, no directory) yields ErrNotRepo so callers silently skip.
+func OpenRemote(ctx context.Context, target, dir string) (*Store, error) {
+	s := &Store{dir: dir, ssh: target}
+	if _, err := s.run(ctx, "rev-parse", "--git-dir"); err != nil {
+		var rerr *rhost.Error
+		if errors.As(err, &rerr) && rerr.Transport() {
+			return nil, err // unreachable host is worth reporting, not skipping
+		}
+		return nil, ErrNotRepo
+	}
+	return s, nil
+}
+
 // Dir returns the directory this store tracks.
 func (s *Store) Dir() string { return s.dir }
 
@@ -67,11 +87,21 @@ func (s *Store) Dir() string { return s.dir }
 // so commits work on hosts where git was never configured.
 func (s *Store) run(ctx context.Context, args ...string) (string, error) {
 	full := append([]string{
+		"git",
 		"-C", s.dir,
 		"-c", "user.name=rookery",
 		"-c", "user.email=rookery@localhost",
 	}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
+	if s.ssh != "" {
+		out, err := rhost.Run(ctx, s.ssh, rhost.QuoteArgv(full), nil)
+		if err != nil {
+			// %w keeps the *rhost.Error chain so callers can tell transport
+			// failures from git verdicts.
+			return out, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
+		return out, nil
+	}
+	cmd := exec.CommandContext(ctx, full[0], full[1:]...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
