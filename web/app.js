@@ -150,13 +150,15 @@ function renderLogin() {
   $hoststrip.innerHTML = "";
   $app.innerHTML = `
     <div class="login">
-      <h1>🦭 Rookery</h1>
-      <p class="muted">Sign in to manage this host's Quadlets.</p>
-      <form id="login-form" class="toolbar">
-        <input type="password" id="login-pass" class="input" placeholder="Admin password" autocomplete="current-password">
-        <button class="btn btn-accent">Sign in</button>
-      </form>
-      <p id="login-err" class="banner banner-error" hidden></p>
+      <div class="login-card">
+        <h1>🦭 Rookery</h1>
+        <p class="muted">Sign in to manage this host's Quadlets.</p>
+        <form id="login-form" class="toolbar">
+          <input type="password" id="login-pass" class="input" placeholder="Admin password" autocomplete="current-password">
+          <button class="btn btn-accent">Sign in</button>
+        </form>
+        <p id="login-err" class="banner banner-error" hidden></p>
+      </div>
     </div>`;
   const $err = document.getElementById("login-err");
   document.getElementById("login-form").addEventListener("submit", async ev => {
@@ -188,18 +190,15 @@ async function renderHostStrip() {
   try {
     const { body } = await api("/api/host");
     const m = body.metrics || {};
-    const memPct = m.memTotalKb ? Math.round(100 * (1 - m.memAvailKb / m.memTotalKb)) : null;
     const bits = [];
-    if (m.hostname) bits.push(`<span title="kernel ${esc(m.kernel)}">${esc(m.hostname)}</span>`);
-    if (m.load1 != null) bits.push(`<span>load ${m.load1.toFixed(2)}</span>`);
-    if (memPct != null) bits.push(`<span>mem ${memPct}%</span>`);
-    if (body.podman) bits.push(`<span>podman ${esc(body.podman.version)} · ${body.podman.containersRunning}/${body.podman.containersTotal} running</span>`);
-    if (body.selinuxEnforcing) bits.push(`<span title="SELinux is enforcing; Rookery will hint about unlabeled bind mounts">selinux</span>`);
-    if (!body.generatorAvailable) bits.push(`<span class="warn" title="podman quadlet generator not found; validation disabled">no validator</span>`);
+    if (m.hostname) bits.push(`<span class="chip" title="kernel ${esc(m.kernel)}">${esc(m.hostname)}</span>`);
+    if (body.podman) bits.push(`<span class="chip">podman ${esc(body.podman.version)}</span>`);
+    if (body.selinuxEnforcing) bits.push(`<span class="chip" title="SELinux is enforcing; Rookery will hint about unlabeled bind mounts">selinux</span>`);
+    if (!body.generatorAvailable) bits.push(`<span class="chip chip-warn" title="podman quadlet generator not found; validation disabled">no validator</span>`);
     if (authState.required && authState.authenticated) {
-      bits.push(`<a href="#" id="btn-logout" title="sign out">logout</a>`);
+      bits.push(`<a class="chip" href="#" id="btn-logout" title="sign out">logout</a>`);
     }
-    $hoststrip.innerHTML = bits.join('<span class="sep">·</span>');
+    $hoststrip.innerHTML = bits.join("");
     const lo = document.getElementById("btn-logout");
     if (lo) lo.addEventListener("click", ev => { ev.preventDefault(); logout(); });
   } catch { /* strip is decorative; never block the app on it */ }
@@ -208,10 +207,19 @@ async function renderHostStrip() {
 /* ---------- dashboard ---------- */
 
 function meter(label, pct, text) {
-  return `<span class="meter" title="${esc(label)}">
-    <span class="meter-fill" style="width:${Math.min(100, Math.max(0, pct))}%"></span>
-    <span class="meter-text">${esc(label)} ${esc(text)}</span>
+  const clamped = Math.min(100, Math.max(0, pct));
+  return `<span class="meter-block" title="${esc(label)} ${esc(text)}">
+    <span class="meter-head"><span class="meter-label">${esc(label)}</span><span class="meter-val">${esc(text)}</span></span>
+    <span class="meter"><span class="meter-fill" style="width:${clamped}%"></span></span>
   </span>`;
+}
+
+function tile(label, value, cls, extra) {
+  return `<div class="tile ${cls || ""}">
+    <div class="tile-value">${value}</div>
+    <div class="tile-label">${esc(label)}</div>
+    ${extra || ""}
+  </div>`;
 }
 
 async function gpuPanelHTML() {
@@ -234,8 +242,25 @@ async function gpuPanelHTML() {
   } catch { return ""; }
 }
 
+let unitFilter = "";
+
+function applyUnitFilter() {
+  const q = unitFilter.trim().toLowerCase();
+  $app.querySelectorAll(".card[data-name]").forEach(c => {
+    c.style.display = !q || c.dataset.name.includes(q) || c.dataset.sub.includes(q) ? "" : "none";
+  });
+  $app.querySelectorAll(".unit-group").forEach(g => {
+    const any = [...g.querySelectorAll(".card")].some(c => c.style.display !== "none");
+    g.style.display = any ? "" : "none";
+  });
+}
+
 async function renderDashboard() {
-  const [{ body }, gpuHTML] = await Promise.all([api("/api/units"), gpuPanelHTML()]);
+  const [{ body }, gpuHTML, host] = await Promise.all([
+    api("/api/units"),
+    gpuPanelHTML(),
+    api("/api/host").then(r => r.body).catch(() => null),
+  ]);
   const units = body.units || [];
   const groups = { failed: [], running: [], pending: [], stopped: [], unknown: [] };
   units.forEach(u => groups[stateClass(u)].push(u));
@@ -243,17 +268,36 @@ async function renderDashboard() {
   const scopeErrors = Object.entries(body.scopeErrors || {})
     .map(([s, e]) => `<p class="banner banner-warn">scope <b>${esc(s)}</b>: ${esc(e)}</p>`).join("");
 
-  const section = (title, list, cls) => !list.length ? "" : `
+  // Stat tiles: unit states at a glance plus the host vitals that used to
+  // hide in the header strip. Status color never appears without its label.
+  const m = host?.metrics || {};
+  const memPct = m.memTotalKb ? Math.round(100 * (1 - m.memAvailKb / m.memTotalKb)) : null;
+  const updatesAvail = Object.values(updateInfo).filter(r => r.updateAvailable).length;
+  const tiles = !units.length ? "" : `<div class="tiles">
+    ${tile("running", groups.running.length, groups.running.length ? "tile-ok" : "tile-dim")}
+    ${tile("failed", groups.failed.length, groups.failed.length ? "tile-bad" : "tile-dim")}
+    ${tile("stopped", groups.stopped.length + groups.unknown.length, "tile-dim")}
+    ${updatesAvail ? tile("updates available", updatesAvail, "tile-warn") : ""}
+    ${m.load1 != null ? tile("load 1m", m.load1.toFixed(2)) : ""}
+    ${memPct != null ? tile("memory", memPct + "%", "", `<span class="meter"><span class="meter-fill" style="width:${memPct}%"></span></span>`) : ""}
+    ${host?.podman ? tile("containers up", `${host.podman.containersRunning}<span class="muted">/${host.podman.containersTotal}</span>`) : ""}
+  </div>`;
+
+  const section = (title, list, cls) => !list.length ? "" : `<section class="unit-group">
     <h2 class="group-title ${cls}">${title} <span class="count">${list.length}</span></h2>
-    <div class="grid">${list.map(card).join("")}</div>`;
+    <div class="grid">${list.map(card).join("")}</div></section>`;
 
   $app.innerHTML = `
     ${scopeErrors}
+    ${tiles}
     ${gpuHTML}
     ${units.length ? "" : `<div class="empty">
        <p>No Quadlet units found.</p>
        <p class="muted">Create one with <a href="#/new">＋ New unit</a>, or convert an existing
        <code>podman run</code> command, compose file, or running container with <a href="#/import">⤵ Import</a>.</p></div>`}
+    ${units.length > 8 ? `<div class="toolbar">
+      <input id="filter" class="input input-filter" type="search" placeholder="Filter by name or image…" value="${esc(unitFilter)}">
+    </div>` : ""}
     ${section("Failed", groups.failed, "failed")}
     ${section("Running", groups.running, "running")}
     ${section("Transitioning", groups.pending, "pending")}
@@ -263,6 +307,12 @@ async function renderDashboard() {
       <button class="btn" id="btn-check-updates">Check image updates</button>
       <span class="muted">${esc(updateSummary)}</span>
     </div>` : ""}`;
+
+  const $filter = document.getElementById("filter");
+  if ($filter) {
+    $filter.addEventListener("input", () => { unitFilter = $filter.value; applyUnitFilter(); });
+    applyUnitFilter();
+  }
 
   const $chk = document.getElementById("btn-check-updates");
   if ($chk) {
@@ -311,7 +361,8 @@ function card(u) {
   const canStart = cls === "stopped" || cls === "failed";
   const loop = u.restarts > 0 && (cls === "failed" || u.sub === "auto-restart");
   return `
-  <a class="card ${cls}" href="#/unit/${encodeURIComponent(u.scope)}/${encodeURIComponent(u.name)}">
+  <a class="card ${cls}" href="#/unit/${encodeURIComponent(u.scope)}/${encodeURIComponent(u.name)}"
+     data-name="${esc(u.name.toLowerCase())}" data-sub="${esc(((u.description || "") + " " + (u.image || "")).toLowerCase())}">
     <div class="card-head">
       <span class="dot"></span>
       <span class="card-name">${esc(u.name)}</span>
@@ -858,7 +909,11 @@ async function render() {
     } else {
       await renderDashboard();
       refreshTimer = setInterval(() => {
-        if (!document.hidden) { renderDashboard(); renderHostStrip(); }
+        // A re-render would clobber the filter box mid-keystroke.
+        if (!document.hidden && document.activeElement?.id !== "filter") {
+          renderDashboard();
+          renderHostStrip();
+        }
       }, 5000);
     }
   } catch (e) {
