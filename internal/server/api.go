@@ -185,6 +185,11 @@ func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
 		Restart bool   `json:"restart"`
+		// BaseContent, when present, is the content the editor loaded.
+		// If the file on disk no longer matches, the save is rejected —
+		// a stale browser tab must not silently revert someone's changes
+		// (this bit the dogfooded rookery.container itself, twice).
+		BaseContent *string `json:"baseContent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
@@ -193,6 +198,13 @@ func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
 	if exists && filepath.Dir(path) != area.Dirs[0] {
 		httpError(w, http.StatusConflict, fmt.Sprintf("%s lives in read-only directory %s", name, filepath.Dir(path)))
 		return
+	}
+	if exists && req.BaseContent != nil {
+		if cur, err := areaReadFile(r.Context(), area, path); err == nil && string(cur) != *req.BaseContent {
+			httpError(w, http.StatusConflict,
+				name+" changed on disk since this editor loaded it — reload the unit, then re-apply your edit")
+			return
+		}
 	}
 
 	msg := "rookery: save " + name

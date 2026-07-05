@@ -833,7 +833,13 @@ async function renderUnit(scope, name) {
     try {
       const { status, body } = await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`, {
         method: "PUT",
-        body: JSON.stringify({ content: $editor.value, restart: document.getElementById("chk-restart").checked }),
+        body: JSON.stringify({
+          content: $editor.value,
+          restart: document.getElementById("chk-restart").checked,
+          // The server rejects the save if the file changed on disk since
+          // this content was loaded (stale-tab protection).
+          baseContent: savedContent,
+        }),
       });
       $validation.innerHTML = validationHTML(body.validation, body.hints);
       if (status === 422) { toast("rejected by validator", true); return; }

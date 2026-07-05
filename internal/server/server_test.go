@@ -229,6 +229,34 @@ func TestPutUnitValidationRejection(t *testing.T) {
 	}
 }
 
+func TestPutUnitStaleBaseRejected(t *testing.T) {
+	srv, _, dir := newTestServer(t, okValidator)
+	loaded := "[Container]\nImage=docker.io/jellyfin/jellyfin:latest\n"
+	// Someone else changes the file after our editor loaded it.
+	changed := "[Container]\nImage=docker.io/jellyfin/jellyfin:10.9\n"
+	if err := os.WriteFile(filepath.Join(dir, "jellyfin.container"), []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec, body := doJSON(t, srv, "PUT", "/api/units/system/jellyfin.container",
+		fmt.Sprintf(`{"content": "[Container]\nImage=x\n", "baseContent": %q}`, loaded))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale save: status %d (%v), want 409", rec.Code, body)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "jellyfin.container")); string(got) != changed {
+		t.Error("stale save modified the file")
+	}
+	// Matching base saves fine; omitted base keeps the old unchecked behavior.
+	rec, _ = doJSON(t, srv, "PUT", "/api/units/system/jellyfin.container",
+		fmt.Sprintf(`{"content": "[Container]\nImage=y\n", "baseContent": %q}`, changed))
+	if rec.Code != http.StatusOK {
+		t.Errorf("fresh save: status %d, want 200", rec.Code)
+	}
+	rec, _ = doJSON(t, srv, "PUT", "/api/units/system/jellyfin.container", `{"content": "[Container]\nImage=z\n"}`)
+	if rec.Code != http.StatusOK {
+		t.Errorf("no-base save: status %d, want 200", rec.Code)
+	}
+}
+
 func TestPutUnitBadName(t *testing.T) {
 	srv, _, _ := newTestServer(t, okValidator)
 	for _, name := range []string{"evil.txt", "..%2Fowned.container", ".hidden.container"} {
