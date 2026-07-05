@@ -522,14 +522,23 @@ async function renderDashboard() {
   const updatesAvail = Object.values(updateInfo).filter(r => r.updateAvailable).length;
   // Tile counts come from raw unit states — NOT from the section grouping,
   // which nests pod members inside pod cards and would undercount them.
-  const stateCount = cls => svc.filter(u => stateClass(u) === cls).length;
-  const runningCount = stateCount("running");
-  const failedCount = stateCount("failed");
+  // Containers and pods are separate populations with separate tiles.
+  const containers = svc.filter(u => u.kind !== "pod");
+  const count = (list, cls) => list.filter(u => stateClass(u) === cls).length;
+  const cRunning = count(containers, "running");
+  const pRunning = count(pods, "running");
+  const failedCount = count(svc, "failed");
+  const networks = infra.filter(u => u.kind === "network");
+  const volumes = infra.filter(u => u.kind === "volume");
+  const otherInfra = infra.length - networks.length - volumes.length;
   const tiles = !units.length ? "" : `<div class="tiles">
-    ${tile("running", `${runningCount}<span class="muted">/${svc.length}</span>`, runningCount ? "tile-ok" : "tile-dim")}
+    ${tile("containers", `${cRunning}<span class="muted">/${containers.length}</span>`, cRunning ? "tile-ok" : "tile-dim")}
+    ${pods.length ? tile("pods", `${pRunning}<span class="muted">/${pods.length}</span>`, pRunning ? "tile-ok" : "tile-dim") : ""}
     ${tile("failed", failedCount, failedCount ? "tile-bad" : "tile-dim")}
-    ${tile("stopped", stateCount("stopped") + stateCount("unknown"), "tile-dim")}
-    ${infra.length ? tile("networks & volumes", infra.length, infraBad ? "tile-bad" : "tile-dim") : ""}
+    ${tile("stopped", count(svc, "stopped") + count(svc, "unknown"), "tile-dim")}
+    ${networks.length ? tile(networks.length === 1 ? "network" : "networks", networks.length, infraBad ? "tile-bad" : "tile-dim") : ""}
+    ${volumes.length ? tile(volumes.length === 1 ? "volume" : "volumes", volumes.length, "tile-dim") : ""}
+    ${otherInfra ? tile("images & builds", otherInfra, "tile-dim") : ""}
     ${updatesAvail ? tile("updates available", updatesAvail, "tile-warn") : ""}
     ${m.cpuPct >= 0 ? tile("cpu", m.cpuPct + "%", "", `<span class="meter"><span class="meter-fill" style="width:${m.cpuPct}%"></span></span>`) : ""}
     ${m.load1 != null ? tile(m.cores ? `load 1m · ${m.cores} cores` : "load 1m", m.load1.toFixed(2)) : ""}
