@@ -22,8 +22,9 @@ Volume=/etc/containers/systemd:/etc/containers/systemd
 Volume=/etc/rookery:/etc/rookery
 Volume=/run/systemd:/run/systemd
 # systemd's private socket (/run/systemd/private) rejects clients from
-# another PID namespace, so systemctl only works with the host's.
-PodmanArgs=--pid=host
+# another PID namespace, so systemctl only works with the host's. uts=host
+# makes the dashboard show the real hostname instead of the container ID.
+PodmanArgs=--pid=host --uts=host
 Volume=/var/log/journal:/var/log/journal:ro
 Volume=/run/podman/podman.sock:/run/podman/podman.sock:ro
 # The HOST's quadlet generator, so validation matches the Podman that will

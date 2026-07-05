@@ -8,6 +8,18 @@
 const $app = document.getElementById("app");
 const $hoststrip = document.getElementById("hoststrip");
 
+// Surface unexpected JS errors instead of a silently frozen page.
+window.addEventListener("error", ev => {
+  document.title = "Rookery — error: " + ev.message;
+  const t = document.createElement("div");
+  t.className = "toast toast-error";
+  t.textContent = "UI error: " + ev.message;
+  document.body.appendChild(t);
+});
+window.addEventListener("unhandledrejection", ev => {
+  document.title = "Rookery — rejection: " + (ev.reason?.message || ev.reason);
+});
+
 let refreshTimer = null;
 let logSource = null;
 let authState = { required: false, authenticated: true, readOnly: false, setupNeeded: false, username: "", role: "" };
@@ -350,33 +362,63 @@ async function renderHostStrip() {
     if (body.podman) bits.push(`<span class="chip">podman ${esc(body.podman.version)}</span>`);
     if (body.selinuxEnforcing) bits.push(`<span class="chip" title="SELinux is enforcing; Rookery will hint about unlabeled bind mounts">selinux</span>`);
     if (!body.generatorAvailable) bits.push(`<span class="chip chip-warn" title="podman quadlet generator not found; validation disabled">no validator</span>`);
-    if (authState.readOnly) {
-      bits.push(`<span class="chip chip-warn" title="read-only access">read-only${authState.username ? " · " + esc(authState.username) : ""}</span>`);
-      if (authState.username) bits.push(`<a class="chip" href="#" id="btn-logout" title="sign out">logout</a>`);
-    } else if (authState.required && authState.authenticated) {
-      if (authState.username) bits.push(`<span class="chip" title="signed in as ${esc(authState.username)}">👤 ${esc(authState.username)}</span>`);
-      bits.push(`<a class="chip" href="#/users" title="manage accounts">users</a>`);
-      bits.push(`<a class="chip" href="#" id="btn-share" title="copy a 7-day read-only share link">share</a>`);
-      bits.push(`<a class="chip" href="#" id="btn-logout" title="sign out">logout</a>`);
-    }
+    if (authState.readOnly) bits.push(`<span class="chip chip-warn" title="read-only access">read-only</span>`);
     $hoststrip.innerHTML = bits.join("");
-    const lo = document.getElementById("btn-logout");
-    if (lo) lo.addEventListener("click", ev => { ev.preventDefault(); logout(); });
-    const sh = document.getElementById("btn-share");
-    if (sh) sh.addEventListener("click", async ev => {
-      ev.preventDefault();
-      try {
-        const { body } = await api("/api/share", { method: "POST", body: "{}" });
-        const url = `${location.origin}/?share=${encodeURIComponent(body.token)}`;
-        try {
-          await navigator.clipboard.writeText(url);
-          toast("read-only link copied — valid 7 days");
-        } catch {
-          prompt("Read-only share link (valid 7 days):", url);
-        }
-      } catch (e) { toast(e.message, true); }
-    });
   } catch { /* strip is decorative; never block the app on it */ }
+  renderMenu();
+}
+
+/* ---------- header menu (collapsible) ---------- */
+
+function renderMenu() {
+  const $menu = document.getElementById("menu");
+  const items = [];
+  if (authState.username) {
+    items.push(`<div class="menu-note">signed in as <b>${esc(authState.username)}</b>${authState.readOnly ? " (read-only)" : ""}</div>`);
+    items.push(`<div class="menu-sep"></div>`);
+  }
+  if (!authState.readOnly) {
+    items.push(`<a href="#/import">⤵ Import</a>`);
+    items.push(`<a href="#/secrets">🔑 Secrets</a>`);
+    if (authState.required && authState.authenticated) {
+      items.push(`<a href="#/users">👥 Users</a>`);
+      items.push(`<a href="#" id="menu-share">🔗 Copy share link</a>`);
+    }
+  }
+  if (authState.required && authState.authenticated && (authState.username || !authState.readOnly)) {
+    items.push(`<div class="menu-sep"></div>`);
+    items.push(`<a href="#" id="menu-logout">⏻ Log out</a>`);
+  }
+  $menu.innerHTML = items.join("");
+
+  const lo = document.getElementById("menu-logout");
+  if (lo) lo.addEventListener("click", ev => { ev.preventDefault(); $menu.hidden = true; logout(); });
+  const sh = document.getElementById("menu-share");
+  if (sh) sh.addEventListener("click", async ev => {
+    ev.preventDefault();
+    $menu.hidden = true;
+    try {
+      const { body } = await api("/api/share", { method: "POST", body: "{}" });
+      const url = `${location.origin}/?share=${encodeURIComponent(body.token)}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast("read-only link copied — valid 7 days");
+      } catch {
+        prompt("Read-only share link (valid 7 days):", url);
+      }
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+{
+  const $menu = document.getElementById("menu");
+  document.getElementById("menu-btn").addEventListener("click", ev => {
+    ev.stopPropagation();
+    $menu.hidden = !$menu.hidden;
+  });
+  document.addEventListener("click", ev => {
+    if (!$menu.hidden && !$menu.contains(ev.target)) $menu.hidden = true;
+  });
 }
 
 /* ---------- dashboard ---------- */
@@ -408,11 +450,13 @@ async function gpuPanelHTML() {
       const memPct = d.memoryTotalMb > 0 && d.memoryUsedMb >= 0
         ? Math.round(100 * d.memoryUsedMb / d.memoryTotalMb) : null;
       return `<div class="gpu-row">
-        <span class="badge badge-gpu">${esc(d.vendor)}</span>
-        ${d.host ? `<span class="badge badge-user" title="on remote host ${esc(d.host)}">${esc(d.host)}</span>` : ""}
-        <span class="gpu-name">${esc(d.name)}</span>
-        ${d.utilizationPct >= 0 ? meter("util", d.utilizationPct, d.utilizationPct + "%") : ""}
-        ${memPct != null ? meter("vram", memPct, memText) : ""}
+        <span class="gpu-id">
+          <span class="badge badge-gpu">${esc(d.vendor)}</span>
+          ${d.host ? `<span class="badge badge-user" title="on remote host ${esc(d.host)}">${esc(d.host)}</span>` : ""}
+          <span class="gpu-name">${esc(d.name)}</span>
+        </span>
+        ${d.utilizationPct >= 0 ? meter("util", d.utilizationPct, d.utilizationPct + "%") : `<span class="meter-none">util n/a</span>`}
+        ${memPct != null ? meter("vram", memPct, memText) : `<span class="meter-none">vram n/a</span>`}
       </div>`;
     }).join("") + `</div>`;
   } catch { return ""; }
@@ -438,15 +482,35 @@ async function renderDashboard() {
     api("/api/host").then(r => r.body).catch(() => null),
   ]);
   const units = body.units || [];
-  const groups = { failed: [], running: [], pending: [], stopped: [], unknown: [] };
-  units.forEach(u => groups[stateClass(u)].push(u));
+  // Networks, volumes, images, and builds are oneshot infrastructure —
+  // systemd calls them "active", but counting them as "running" (or their
+  // absence as "stopped") misreads the dashboard. They get their own
+  // section and stay out of the state tiles.
+  const isInfra = u => ["network", "volume", "image", "build"].includes(u.kind);
+  const svc = units.filter(u => !isInfra(u));
+  const infra = units.filter(isInfra);
+  const infraBad = infra.filter(u => stateClass(u) === "failed").length;
 
   // Pod composition: containers with Pod= are members of a pod unit in the
-  // same scope; the pod card rolls up their state.
+  // same scope; they render inside their pod's card, not as loose cards.
   podMembers = {};
+  const podKeys = new Set(units.filter(u => u.kind === "pod").map(u => `${u.scope}/${u.name}`));
   units.forEach(u => {
-    if (u.pod) (podMembers[`${u.scope}/${u.pod}`] ||= []).push(u);
+    if (u.pod && podKeys.has(`${u.scope}/${u.pod}`)) (podMembers[`${u.scope}/${u.pod}`] ||= []).push(u);
   });
+  const inPod = u => u.pod && podKeys.has(`${u.scope}/${u.pod}`);
+
+  const pods = svc.filter(u => u.kind === "pod");
+  const groups = { failed: [], running: [], pending: [], stopped: [], unknown: [] };
+  svc.forEach(u => {
+    if (u.kind === "pod") return; // pods get their own section
+    // Members live inside their pod's card — EXCEPT failed ones, which
+    // must also surface in Failed where nobody can miss them.
+    if (inPod(u) && stateClass(u) !== "failed") return;
+    groups[stateClass(u)].push(u);
+  });
+  const podsBad = pods.filter(u => stateClass(u) === "failed").length +
+    svc.filter(u => inPod(u) && stateClass(u) === "failed").length;
 
   const scopeErrors = Object.entries(body.scopeErrors || {})
     .map(([s, e]) => `<p class="banner banner-warn">scope <b>${esc(s)}</b>: ${esc(e)}</p>`).join("");
@@ -457,18 +521,19 @@ async function renderDashboard() {
   const memPct = m.memTotalKb ? Math.round(100 * (1 - m.memAvailKb / m.memTotalKb)) : null;
   const updatesAvail = Object.values(updateInfo).filter(r => r.updateAvailable).length;
   const tiles = !units.length ? "" : `<div class="tiles">
-    ${tile("running", groups.running.length, groups.running.length ? "tile-ok" : "tile-dim")}
+    ${tile("running", `${groups.running.length}<span class="muted">/${svc.length}</span>`, groups.running.length ? "tile-ok" : "tile-dim")}
     ${tile("failed", groups.failed.length, groups.failed.length ? "tile-bad" : "tile-dim")}
     ${tile("stopped", groups.stopped.length + groups.unknown.length, "tile-dim")}
+    ${infra.length ? tile("networks & volumes", infra.length, infraBad ? "tile-bad" : "tile-dim") : ""}
     ${updatesAvail ? tile("updates available", updatesAvail, "tile-warn") : ""}
-    ${m.load1 != null ? tile("load 1m", m.load1.toFixed(2)) : ""}
+    ${m.cpuPct >= 0 ? tile("cpu", m.cpuPct + "%", "", `<span class="meter"><span class="meter-fill" style="width:${m.cpuPct}%"></span></span>`) : ""}
+    ${m.load1 != null ? tile(m.cores ? `load 1m · ${m.cores} cores` : "load 1m", m.load1.toFixed(2)) : ""}
     ${memPct != null ? tile("memory", memPct + "%", "", `<span class="meter"><span class="meter-fill" style="width:${memPct}%"></span></span>`) : ""}
-    ${host?.podman ? tile("containers up", `${host.podman.containersRunning}<span class="muted">/${host.podman.containersTotal}</span>`) : ""}
   </div>`;
 
-  const section = (title, list, cls) => !list.length ? "" : `<section class="unit-group">
+  const section = (title, list, cls, renderer) => !list.length ? "" : `<section class="unit-group">
     <h2 class="group-title ${cls}">${title} <span class="count">${list.length}</span></h2>
-    <div class="grid">${list.map(card).join("")}</div></section>`;
+    <div class="grid">${list.map(renderer || card).join("")}</div></section>`;
 
   $app.innerHTML = `
     ${scopeErrors}
@@ -483,10 +548,12 @@ async function renderDashboard() {
       <input id="filter" class="input input-filter" type="search" placeholder="Filter by name or image…" value="${esc(unitFilter)}">
     </div>` : ""}
     ${section("Failed", groups.failed, "failed")}
+    ${section("Pods", pods, podsBad ? "failed" : "running", podCard)}
     ${section("Running", groups.running, "running")}
     ${section("Transitioning", groups.pending, "pending")}
     ${section("Stopped", groups.stopped, "stopped")}
     ${section("State unknown", groups.unknown, "unknown")}
+    ${section("Networks & volumes", infra, "stopped")}
     ${units.length ? `<div class="toolbar updates-bar">
       <button class="btn" id="btn-check-updates">Check image updates</button>
       <span class="muted">${esc(updateSummary)}</span>
@@ -570,6 +637,42 @@ function podSummary(u) {
   return `<span class="pod-summary">${members.map(m =>
     `<span class="dot ${stateClass(m)}" title="${esc(m.name)}: ${esc(stateLabel(m))}"></span>`).join("")}
     ${up}/${members.length} members up${bad ? ` · <b class="warn-text">${bad} failed</b>` : ""}</span>`;
+}
+
+// podCard is a pod with its member containers nested inside — the
+// composition view. It's a div (not one big link) because members are
+// links themselves.
+function podCard(u) {
+  const cls = stateClass(u);
+  const members = podMembers[`${u.scope}/${u.name}`] || [];
+  const memberBad = members.some(m => stateClass(m) === "failed");
+  const href = m => `#/unit/${encodeURIComponent(m.scope)}/${encodeURIComponent(m.name)}`;
+  const sub = ((u.description || "") + " " + members.map(m => m.name).join(" ")).toLowerCase();
+  return `
+  <div class="card pod-card ${cls} ${memberBad ? "failed" : ""}"
+       data-name="${esc(u.name.toLowerCase())}" data-sub="${esc(sub)}">
+    <a class="card-head" href="${href(u)}">
+      <span class="dot"></span>
+      <span class="card-name">${esc(u.name)}</span>
+      <span class="badge">pod</span>
+      <span class="state" style="margin-left:auto">${esc(stateLabel(u))}</span>
+    </a>
+    <div class="pod-member-list">
+      ${members.map(m => `<a class="pod-member" href="${href(m)}">
+        <span class="dot ${stateClass(m)}"></span>
+        <span class="member-name">${esc(m.name.replace(/\.container$/, ""))}</span>
+        <span class="member-state ${stateClass(m) === "failed" ? "warn-text" : ""}">${esc(stateLabel(m))}</span>
+      </a>`).join("") || `<p class="muted" style="margin:4px 0">no members declare Pod=${esc(u.name)} yet</p>`}
+    </div>
+    <div class="card-foot">
+      <span class="state">${members.length ? `${members.filter(m => stateClass(m) === "running").length}/${members.length} members up` : ""}</span>
+      <span class="actions">
+        ${cls === "stopped" || cls === "failed" ? btnAction(u, "start", "▶") : ""}
+        ${cls === "running" || cls === "pending" ? btnAction(u, "stop", "■") : ""}
+        ${btnAction(u, "restart", "↻")}
+      </span>
+    </div>
+  </div>`;
 }
 
 function card(u) {

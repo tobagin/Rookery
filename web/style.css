@@ -77,6 +77,28 @@ header {
 .chip-warn { color: var(--pending); border-color: rgba(250, 178, 25, 0.45); }
 a.chip:hover { color: var(--fg); border-color: var(--border-strong); }
 
+/* Collapsible header menu: session + navigation live here so the header
+   stays one row at any width. */
+.menu {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  z-index: 20;
+  background: var(--bg-raise);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4), 0 16px 40px -12px rgba(0, 0, 0, 0.6);
+  padding: 6px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+}
+.menu[hidden] { display: none; }
+.menu a { padding: 9px 12px; border-radius: 8px; color: var(--fg); font-size: 14px; }
+.menu a:hover { background: rgba(148, 178, 209, 0.08); color: var(--fg); }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.menu-note { padding: 7px 12px 5px; color: var(--muted); font-size: 12px; }
+
 main { padding: 20px 18px 48px; max-width: 1160px; margin: 0 auto; }
 
 .muted { color: var(--muted); }
@@ -120,7 +142,7 @@ main { padding: 20px 18px 48px; max-width: 1160px; margin: 0 auto; }
 
 /* ---------- meters (magnitude = single blue, value as text) ---------- */
 
-.meter-block { display: inline-flex; flex-direction: column; gap: 4px; flex: 1; min-width: 130px; max-width: 300px; }
+.meter-block { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .meter-head { display: flex; justify-content: space-between; font-size: 12px; }
 .meter-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
 .meter-val { color: var(--fg-2); font-variant-numeric: tabular-nums; }
@@ -197,6 +219,24 @@ main { padding: 20px 18px 48px; max-width: 1160px; margin: 0 auto; }
 .pod-summary { display: inline-flex; align-items: center; gap: 4px; }
 .pod-summary .dot { width: 7px; height: 7px; box-shadow: none; }
 .warn-text { color: var(--failed); font-weight: 650; }
+
+/* Pod cards: members nested as rows inside the pod's card. */
+.pod-card .card-head { color: var(--fg); }
+.pod-card .card-head:hover .card-name { color: var(--accent-soft); }
+.pod-member-list { margin: 8px 0 10px; border-top: 1px solid var(--border); }
+.pod-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 13.5px;
+}
+.pod-member:hover { background: rgba(148, 178, 209, 0.05); color: var(--fg); }
+.pod-member .dot { width: 7px; height: 7px; box-shadow: none; }
+.member-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-state { color: var(--muted); font-size: 12px; flex: none; }
 .card .actions { display: flex; gap: 6px; flex: none; }
 
 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--unknown); display: inline-block; }
@@ -368,9 +408,21 @@ textarea[readonly] { opacity: 0.7; }
   padding: 4px 14px;
   margin-bottom: 4px;
 }
-.gpu-row { display: flex; align-items: center; gap: 16px; padding: 10px 0; flex-wrap: wrap; }
+/* Fixed grid so the util/vram meters align across every row. */
+.gpu-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px) 1fr 1fr;
+  gap: 16px;
+  align-items: center;
+  padding: 10px 0;
+}
 .gpu-row + .gpu-row { border-top: 1px solid var(--border); }
-.gpu-name { font-weight: 600; min-width: 160px; }
+.gpu-id { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.gpu-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meter-none { color: var(--muted); font-size: 12px; }
+@media (max-width: 640px) {
+  .gpu-row { grid-template-columns: 1fr; gap: 8px; }
+}
 
 /* ---------- history ---------- */
 
@@ -435,7 +487,7 @@ textarea[readonly] { opacity: 0.7; }
 /* ---------- read-only share mode (server enforces; this is cosmetics) ---------- */
 
 body.readonly .card .actions,
-body.readonly header .btn,
+body.readonly header .btn-accent,
 body.readonly .toolbar button,
 body.readonly .hist-restore,
 body.readonly #gpu-helper,
@@ -449,7 +501,7 @@ body.readonly .chk { display: none !important; }
   .grid { grid-template-columns: 1fr; }
   .tiles { grid-template-columns: repeat(2, 1fr); }
   header { padding: 8px 10px; }
-  .hoststrip { order: 3; width: 100%; }
+  .hoststrip { display: none; } /* host facts live in the tiles; menu has the rest */
   .meter-block { max-width: none; }
   main section:not(.unit-group) { padding: 12px; }
   .detail-head h1 { font-size: 20px; }
