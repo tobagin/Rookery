@@ -520,10 +520,15 @@ async function renderDashboard() {
   const m = host?.metrics || {};
   const memPct = m.memTotalKb ? Math.round(100 * (1 - m.memAvailKb / m.memTotalKb)) : null;
   const updatesAvail = Object.values(updateInfo).filter(r => r.updateAvailable).length;
+  // Tile counts come from raw unit states — NOT from the section grouping,
+  // which nests pod members inside pod cards and would undercount them.
+  const stateCount = cls => svc.filter(u => stateClass(u) === cls).length;
+  const runningCount = stateCount("running");
+  const failedCount = stateCount("failed");
   const tiles = !units.length ? "" : `<div class="tiles">
-    ${tile("running", `${groups.running.length}<span class="muted">/${svc.length}</span>`, groups.running.length ? "tile-ok" : "tile-dim")}
-    ${tile("failed", groups.failed.length, groups.failed.length ? "tile-bad" : "tile-dim")}
-    ${tile("stopped", groups.stopped.length + groups.unknown.length, "tile-dim")}
+    ${tile("running", `${runningCount}<span class="muted">/${svc.length}</span>`, runningCount ? "tile-ok" : "tile-dim")}
+    ${tile("failed", failedCount, failedCount ? "tile-bad" : "tile-dim")}
+    ${tile("stopped", stateCount("stopped") + stateCount("unknown"), "tile-dim")}
     ${infra.length ? tile("networks & volumes", infra.length, infraBad ? "tile-bad" : "tile-dim") : ""}
     ${updatesAvail ? tile("updates available", updatesAvail, "tile-warn") : ""}
     ${m.cpuPct >= 0 ? tile("cpu", m.cpuPct + "%", "", `<span class="meter"><span class="meter-fill" style="width:${m.cpuPct}%"></span></span>`) : ""}
