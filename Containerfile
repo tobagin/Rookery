@@ -9,7 +9,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.24 AS build
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.25 AS build
 ARG TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
