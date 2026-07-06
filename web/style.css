@@ -392,6 +392,14 @@ textarea[readonly] { opacity: 0.7; }
 }
 .login h1 { font-size: 28px; margin: 0 0 4px; }
 .login .toolbar { justify-content: center; }
+.sso-btn { display: flex; justify-content: center; margin: 18px 0 0; }
+.login-sep {
+  display: flex; align-items: center; gap: 10px; color: var(--muted);
+  font-size: 12px; margin: 18px 0;
+}
+.login-sep::before, .login-sep::after {
+  content: ""; height: 1px; background: var(--border); flex: 1;
+}
 
 /* ---------- import ---------- */
 

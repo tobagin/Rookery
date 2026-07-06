@@ -12,6 +12,7 @@ import (
 
 	"github.com/tobagin/rookery/internal/gitstore"
 	"github.com/tobagin/rookery/internal/gpu"
+	"github.com/tobagin/rookery/internal/oidc"
 	"github.com/tobagin/rookery/internal/podman"
 	"github.com/tobagin/rookery/internal/quadlet"
 	"github.com/tobagin/rookery/internal/registry"
@@ -77,6 +78,11 @@ type Options struct {
 	// Users is the on-disk account store; an empty store (plus no legacy
 	// Password) triggers the first-run setup wizard. nil disables accounts.
 	Users *userstore.Store
+	// DisablePasswordLogin turns off /api/login for local accounts and the
+	// legacy single password. It is intended for OIDC-only deployments.
+	DisablePasswordLogin bool
+	// OIDC enables browser SSO alongside local accounts.
+	OIDC *oidc.Client
 	// SessionTTL is the idle timeout for login sessions (sliding); zero
 	// means 24h.
 	SessionTTL time.Duration
@@ -107,6 +113,9 @@ type Server struct {
 	version       string
 	password      string
 	users         *userstore.Store
+	noPassword    bool
+	oidc          *oidc.Client
+	oidcStates    *oidcStates
 	selinux       func() bool
 	gpus          func(ctx context.Context) []gpu.Device
 	sess          *sessions
@@ -123,6 +132,9 @@ func New(opts Options) *Server {
 		version:       opts.Version,
 		password:      opts.Password,
 		users:         opts.Users,
+		noPassword:    opts.DisablePasswordLogin,
+		oidc:          opts.OIDC,
+		oidcStates:    newOIDCStates(),
 		selinux:       opts.SELinux,
 		gpus:          opts.GPUs,
 		resolve:       opts.ResolveDigest,
@@ -161,6 +173,8 @@ func New(opts Options) *Server {
 	}
 	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
+	s.mux.HandleFunc("GET /api/oidc/login", s.handleOIDCLogin)
+	s.mux.HandleFunc("GET /api/oidc/callback", s.handleOIDCCallback)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
 	s.mux.HandleFunc("POST /api/share", s.handleShare)
 	s.mux.HandleFunc("GET /api/setup", s.handleSetup)

@@ -111,11 +111,56 @@ manage alice's rootless units).
 | `-listen` | `ROOKERY_LISTEN` | `127.0.0.1:7665` | listen address ("ROOK" on a phone keypad) |
 | `-users` | `ROOKERY_USERS` | auto-discover | rootless users to manage (rootful only); `none` disables |
 | `-password-file` | `ROOKERY_PASSWORD_FILE` | — | legacy single-admin password (or `ROOKERY_PASSWORD`); the wizard is nicer |
+| `-disable-password-login` | `ROOKERY_DISABLE_PASSWORD_LOGIN` | `false` | disable local username/password login; requires OIDC |
 | `-data-dir` | `ROOKERY_DATA_DIR` | `/etc/rookery` (rootful) | where `users.json` lives |
 | `-session-ttl` | `ROOKERY_SESSION_TTL` | `24h` | idle timeout for login sessions (sliding) |
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
 | `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...` |
 | `-alerts` | `ROOKERY_ALERTS` | — | failure alerts: `ntfy://host/topic`, `telegram://TOKEN@CHAT`, webhook URL |
+| `-oidc-issuer` | `ROOKERY_OIDC_ISSUER` | — | OIDC issuer URL for SSO |
+| `-oidc-client-id` | `ROOKERY_OIDC_CLIENT_ID` | — | OIDC client ID |
+| `-oidc-client-secret` | `ROOKERY_OIDC_CLIENT_SECRET` | — | OIDC client secret |
+| `-oidc-redirect-url` | `ROOKERY_OIDC_REDIRECT_URL` | derived | public callback URL; usually `https://host/api/oidc/callback` |
+| `-oidc-name` | `ROOKERY_OIDC_NAME` | `SSO` | label on the login button |
+| `-oidc-admins` | `ROOKERY_OIDC_ADMINS` | — | comma-separated OIDC `sub`, `email`, or `preferred_username` values that get admin |
+| `-oidc-admin-groups` | `ROOKERY_OIDC_ADMIN_GROUPS` | — | comma-separated OIDC `groups` values that get admin |
+| `-oidc-default-role` | `ROOKERY_OIDC_DEFAULT_ROLE` | `viewer` | role for other OIDC users: `viewer` or `admin` |
+
+### OIDC / SSO
+
+Register Rookery as an OIDC confidential web application with callback:
+
+```text
+https://your-rookery.example/api/oidc/callback
+```
+
+Then configure it with flags or environment variables:
+
+```sh
+ROOKERY_OIDC_ISSUER=https://idp.example/application/o/rookery/
+ROOKERY_OIDC_CLIENT_ID=rookery
+ROOKERY_OIDC_CLIENT_SECRET=...
+ROOKERY_OIDC_REDIRECT_URL=https://your-rookery.example/api/oidc/callback
+ROOKERY_OIDC_ADMIN_GROUPS=rookery-admins
+```
+
+OIDC can run alongside local accounts and the legacy single-password mode.
+When OIDC is the only configured credential source, the first-run local
+account wizard is disabled and `/api/*` is protected by SSO. OIDC users are
+viewers by default; grant admin either with `ROOKERY_OIDC_ADMINS` matching
+`sub`, `email`, or `preferred_username`, or with
+`ROOKERY_OIDC_ADMIN_GROUPS` matching the token's `groups` claim. Set
+`ROOKERY_OIDC_DEFAULT_ROLE=admin` only if the identity provider already
+limits access to trusted admins.
+
+For SSO-only deployments, set:
+
+```sh
+ROOKERY_DISABLE_PASSWORD_LOGIN=true
+```
+
+That hides the username/password form and rejects `/api/login`; Rookery will
+refuse to start in this mode unless OIDC is configured.
 
 ### Install as a service
 
@@ -176,6 +221,7 @@ Design rules (from the [PRD](docs/PRD.md)):
 | `POST /api/share` | mint a 7-day read-only share token |
 | `GET/POST /api/setup` | first-run wizard: create the initial admin (one-shot) |
 | `GET/POST /api/users`, `DELETE /api/users/{name}`, `POST /api/users/{name}/password` | account management (admin) |
+| `GET /api/oidc/login` / `GET /api/oidc/callback` | OIDC authorization-code login |
 | `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth (sliding idle timeout) |
 
 `{scope}` is `system`, a username, or a remote-host alias from `-remotes`.
@@ -211,10 +257,11 @@ the common cases and warns about the rest; a binary dependency for edge
 cases isn't worth it — open an issue if you hit a real gap).
 
 Multi-admin accounts with a viewer role shipped with the first-run wizard;
-what remains of the auth story is external identity.
+OIDC / external SSO is available for deployments that already have an
+identity provider.
 
-- **v2**: OIDC / external SSO, systemd credentials alongside podman
-  secrets, pod-level log interleaving.
+- **v2**: systemd credentials alongside podman secrets, pod-level log
+  interleaving.
 
 ## License
 

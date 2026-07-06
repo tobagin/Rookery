@@ -22,7 +22,7 @@ window.addEventListener("unhandledrejection", ev => {
 
 let refreshTimer = null;
 let logSource = null;
-let authState = { required: false, authenticated: true, readOnly: false, setupNeeded: false, username: "", role: "" };
+let authState = { required: false, authenticated: true, readOnly: false, setupNeeded: false, username: "", role: "", oidc: null, passwordLogin: true };
 // Last "check image updates" result, keyed by scope/name; survives the
 // dashboard's periodic re-render.
 let updateInfo = {};
@@ -168,6 +168,8 @@ async function checkAuth() {
       setupNeeded: !!body.setupNeeded,
       username: body.username || "",
       role: body.role || "",
+      oidc: body.oidc || null,
+      passwordLogin: body.passwordLogin !== false,
     };
   } catch { /* open mode if unreachable; the next call will re-ask */ }
 }
@@ -234,35 +236,40 @@ function renderLogin() {
       <div class="login-card">
         <h1>🦭 Rookery</h1>
         <p class="muted">Sign in to manage this host's Quadlets.</p>
-        <form id="login-form">
+        ${authState.oidc?.enabled ? `<a class="btn btn-accent sso-btn" href="/api/oidc/login">Sign in with ${esc(authState.oidc.name || "SSO")}</a>` : ""}
+        ${authState.oidc?.enabled && authState.passwordLogin ? `<div class="login-sep"><span>or</span></div>` : ""}
+        ${authState.passwordLogin ? `<form id="login-form">
           <div class="toolbar" style="flex-direction:column; align-items:stretch">
             <input id="login-user" class="input" placeholder="Username" autocomplete="username">
             <input type="password" id="login-pass" class="input" placeholder="Password" autocomplete="current-password">
             <button class="btn btn-accent">Sign in</button>
           </div>
-        </form>
+        </form>` : ""}
         <p id="login-err" class="banner banner-error" hidden></p>
       </div>
     </div>`;
   const $err = document.getElementById("login-err");
-  document.getElementById("login-form").addEventListener("submit", async ev => {
-    ev.preventDefault();
-    try {
-      await api("/api/login", {
-        method: "POST",
-        body: JSON.stringify({
-          username: document.getElementById("login-user").value.trim(),
-          password: document.getElementById("login-pass").value,
-        }),
-      });
-      await checkAuth();
-      render();
-    } catch (e) {
-      $err.hidden = false;
-      $err.textContent = e.message;
-    }
-  });
-  document.getElementById("login-user").focus();
+  const form = document.getElementById("login-form");
+  if (form) {
+    form.addEventListener("submit", async ev => {
+      ev.preventDefault();
+      try {
+        await api("/api/login", {
+          method: "POST",
+          body: JSON.stringify({
+            username: document.getElementById("login-user").value.trim(),
+            password: document.getElementById("login-pass").value,
+          }),
+        });
+        await checkAuth();
+        render();
+      } catch (e) {
+        $err.hidden = false;
+        $err.textContent = e.message;
+      }
+    });
+    document.getElementById("login-user").focus();
+  }
 }
 
 async function logout() {

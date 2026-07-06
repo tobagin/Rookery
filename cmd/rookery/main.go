@@ -18,6 +18,7 @@ import (
 
 	"github.com/tobagin/rookery/internal/alert"
 	"github.com/tobagin/rookery/internal/gitstore"
+	"github.com/tobagin/rookery/internal/oidc"
 	"github.com/tobagin/rookery/internal/podman"
 	"github.com/tobagin/rookery/internal/quadlet"
 	"github.com/tobagin/rookery/internal/rhost"
@@ -34,12 +35,21 @@ func main() {
 	listen := flag.String("listen", envOr("ROOKERY_LISTEN", "127.0.0.1:7665"), "address to listen on")
 	users := flag.String("users", envOr("ROOKERY_USERS", ""), `comma-separated users whose rootless quadlets to manage (rootful only); empty auto-discovers users with a ~/.config/containers/systemd tree, "none" disables`)
 	passwordFile := flag.String("password-file", envOr("ROOKERY_PASSWORD_FILE", ""), "file containing the admin password (or set ROOKERY_PASSWORD)")
+	disablePasswordLogin := flag.Bool("disable-password-login", envBoolOr("ROOKERY_DISABLE_PASSWORD_LOGIN", false), "disable username/password login; requires OIDC")
 	gitFlag := flag.Bool("git", envOr("ROOKERY_GIT", "") == "1" || envOr("ROOKERY_GIT", "") == "true",
 		"track unit directories in git: commit on save, history, rollback (auto-enabled for dirs that are already repositories)")
 	remotes := flag.String("remotes", envOr("ROOKERY_REMOTES", ""),
 		`comma-separated remote hosts to manage over ssh, as alias=user@host (e.g. "nas=root@nas.local,media=deploy@media.lan")`)
 	alerts := flag.String("alerts", envOr("ROOKERY_ALERTS", ""),
 		`comma-separated failure-alert destinations: ntfy://host/topic, telegram://BOT_TOKEN@CHAT_ID, or an http(s) webhook URL`)
+	oidcIssuer := flag.String("oidc-issuer", envOr("ROOKERY_OIDC_ISSUER", ""), "OIDC issuer URL for SSO")
+	oidcClientID := flag.String("oidc-client-id", envOr("ROOKERY_OIDC_CLIENT_ID", ""), "OIDC client ID")
+	oidcClientSecret := flag.String("oidc-client-secret", envOr("ROOKERY_OIDC_CLIENT_SECRET", ""), "OIDC client secret")
+	oidcRedirectURL := flag.String("oidc-redirect-url", envOr("ROOKERY_OIDC_REDIRECT_URL", ""), "public OIDC callback URL (default derives from request)")
+	oidcName := flag.String("oidc-name", envOr("ROOKERY_OIDC_NAME", "SSO"), "label shown on the SSO sign-in button")
+	oidcAdmins := flag.String("oidc-admins", envOr("ROOKERY_OIDC_ADMINS", ""), "comma-separated OIDC sub/email/preferred_username values that get admin role")
+	oidcAdminGroups := flag.String("oidc-admin-groups", envOr("ROOKERY_OIDC_ADMIN_GROUPS", ""), "comma-separated OIDC groups that get admin role")
+	oidcDefaultRole := flag.String("oidc-default-role", envOr("ROOKERY_OIDC_DEFAULT_ROLE", "viewer"), "role for other OIDC users: viewer or admin")
 	dataDir := flag.String("data-dir", envOr("ROOKERY_DATA_DIR", ""),
 		"directory for rookery's own files (users.json); default /etc/rookery rootful, ~/.config/rookery rootless")
 	sessionTTL := flag.Duration("session-ttl", envDurationOr("ROOKERY_SESSION_TTL", 24*time.Hour),
@@ -60,7 +70,26 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if password == "" && accounts.Empty() {
+	oidcClient, err := oidc.New(oidc.Config{
+		Issuer:       *oidcIssuer,
+		ClientID:     *oidcClientID,
+		ClientSecret: *oidcClientSecret,
+		RedirectURL:  *oidcRedirectURL,
+		ProviderName: *oidcName,
+		DefaultRole:  *oidcDefaultRole,
+		AdminUsers:   splitList(*oidcAdmins),
+		AdminGroups:  splitList(*oidcAdminGroups),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if oidcClient != nil {
+		log.Printf("OIDC SSO enabled for issuer %s", *oidcIssuer)
+	}
+	if *disablePasswordLogin && oidcClient == nil {
+		log.Fatal("-disable-password-login requires OIDC to be configured")
+	}
+	if password == "" && accounts.Empty() && oidcClient == nil && !*disablePasswordLogin {
 		if isLoopback(*listen) {
 			log.Printf("no credentials yet — open http://%s to run the first-run setup", *listen)
 		} else {
@@ -80,13 +109,15 @@ func main() {
 	attachGit(areas, *gitFlag)
 
 	srv := server.New(server.Options{
-		Areas:      areas,
-		Systemd:    systemd.NewManager(),
-		Podman:     podman.New(podman.SocketPath()),
-		Version:    version,
-		Password:   password,
-		Users:      accounts,
-		SessionTTL: *sessionTTL,
+		Areas:                areas,
+		Systemd:              systemd.NewManager(),
+		Podman:               podman.New(podman.SocketPath()),
+		Version:              version,
+		Password:             password,
+		Users:                accounts,
+		DisablePasswordLogin: *disablePasswordLogin,
+		OIDC:                 oidcClient,
+		SessionTTL:           *sessionTTL,
 	})
 
 	if *alerts != "" {
@@ -204,6 +235,20 @@ func envDurationOr(key string, fallback time.Duration) time.Duration {
 		log.Printf("WARNING: %s=%q is not a duration; using %s", key, os.Getenv(key), fallback)
 	}
 	return fallback
+}
+
+func envBoolOr(key string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "":
+		return fallback
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		log.Printf("WARNING: %s=%q is not a boolean; using %t", key, os.Getenv(key), fallback)
+		return fallback
+	}
 }
 
 // resolveDataDir picks where rookery's own files (users.json) live.

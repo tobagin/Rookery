@@ -62,7 +62,7 @@ serves them well).
 - Docker API support (compatibility-socket read-only view at most).
 - Kubernetes anything.
 - Image building, registries, CI — out of scope; Podman CLI does this.
-- RBAC/SSO beyond a single admin login (v2, and keep it free if built).
+- Fine-grained RBAC beyond admin/viewer.
 
 ## 5. Core features
 
@@ -88,11 +88,12 @@ serves them well).
 - **GPU panel**: per-container device attachments, utilization/VRAM via
   nvidia-smi / amdgpu exporters; add-GPU-to-unit helper (CDI syntax).
 - **Update checks**: image digest drift per unit, one-click pull + restart.
+- **Auth hardening**: multi-admin local accounts, viewer role, read-only
+  share links, and optional OIDC SSO with claim-based admin mapping.
 
 ### Later / v2
-- Multi-admin auth (OIDC), read-only share links, alerting hooks
-  (ntfy/Telegram), pod-level composition view, secrets integration
-  (`podman secret` + systemd credentials).
+- Systemd credentials alongside podman secrets, pod-level log interleaving,
+  and optional external-policy integrations if admin/viewer is not enough.
 
 ## 6. Architecture sketch
 

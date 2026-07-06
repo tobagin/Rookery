@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tobagin/rookery/internal/oidc"
 	"github.com/tobagin/rookery/internal/systemd"
 	"github.com/tobagin/rookery/internal/userstore"
 )
@@ -301,5 +302,61 @@ func TestNoPasswordMeansOpen(t *testing.T) {
 	rec, _ = doJSON(t, srv, "GET", "/api/units", "")
 	if rec.Code != http.StatusOK {
 		t.Errorf("open-mode /api/units: status %d", rec.Code)
+	}
+}
+
+func TestOIDCCountsAsConfiguredAuth(t *testing.T) {
+	client, err := oidc.New(oidc.Config{
+		Issuer:       "https://idp.example",
+		ClientID:     "rookery",
+		ClientSecret: "secret",
+		ProviderName: "Example SSO",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Options{
+		Areas:    []Area{{Label: "system", Scope: systemd.Scope{}, Dirs: []string{t.TempDir()}}},
+		Systemd:  &fakeSystemd{},
+		Validate: okValidator,
+		OIDC:     client,
+	})
+	rec, body := doJSON(t, srv, "GET", "/api/auth", "")
+	if rec.Code != http.StatusOK || body["required"] != true || body["authenticated"] != false || body["setupNeeded"] != false {
+		t.Fatalf("OIDC auth status = %d %v", rec.Code, body)
+	}
+	if got := body["oidc"].(map[string]any)["name"]; got != "Example SSO" {
+		t.Fatalf("OIDC provider name = %v", got)
+	}
+	rec, _ = doJSON(t, srv, "GET", "/api/units", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("OIDC-only anonymous units = %d, want 401", rec.Code)
+	}
+}
+
+func TestDisablePasswordLogin(t *testing.T) {
+	client, err := oidc.New(oidc.Config{
+		Issuer:       "https://idp.example",
+		ClientID:     "rookery",
+		ClientSecret: "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Options{
+		Areas:                []Area{{Label: "system", Scope: systemd.Scope{}, Dirs: []string{t.TempDir()}}},
+		Systemd:              &fakeSystemd{},
+		Validate:             okValidator,
+		Password:             "hunter2",
+		OIDC:                 client,
+		DisablePasswordLogin: true,
+	})
+	rec, body := doJSON(t, srv, "GET", "/api/auth", "")
+	if rec.Code != http.StatusOK || body["passwordLogin"] != false {
+		t.Fatalf("auth status passwordLogin = %d %v", rec.Code, body)
+	}
+	rec, _ = doJSON(t, srv, "POST", "/api/login", `{"password":"hunter2"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("disabled password login = %d, want 403", rec.Code)
 	}
 }

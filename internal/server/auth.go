@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tobagin/rookery/internal/oidc"
 	"github.com/tobagin/rookery/internal/userstore"
 )
 
@@ -38,6 +39,51 @@ type sessions struct {
 	mu     sync.Mutex
 	tokens map[string]*session
 	ttl    time.Duration
+}
+
+type oidcState struct {
+	nonce  string
+	expiry time.Time
+}
+
+type oidcStates struct {
+	mu     sync.Mutex
+	states map[string]oidcState
+}
+
+func newOIDCStates() *oidcStates {
+	return &oidcStates{states: map[string]oidcState{}}
+}
+
+func (s *oidcStates) create(nonce string) (string, error) {
+	state, err := oidc.RandomToken()
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for k, v := range s.states {
+		if now.After(v.expiry) {
+			delete(s.states, k)
+		}
+	}
+	s.states[state] = oidcState{nonce: nonce, expiry: now.Add(10 * time.Minute)}
+	return state, nil
+}
+
+func (s *oidcStates) take(state string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.states[state]
+	if !ok {
+		return "", false
+	}
+	delete(s.states, state)
+	if time.Now().After(v.expiry) {
+		return "", false
+	}
+	return v.nonce, true
 }
 
 func newSessions(ttl time.Duration) *sessions {
@@ -91,13 +137,13 @@ func (s *sessions) revoke(token string) {
 // authConfigured reports whether any credential exists: a legacy -password
 // or at least one account in the user store.
 func (s *Server) authConfigured() bool {
-	return s.password != "" || (s.users != nil && !s.users.Empty())
+	return s.oidc != nil || (!s.noPassword && (s.password != "" || (s.users != nil && !s.users.Empty())))
 }
 
 // setupNeeded reports whether the first-run wizard should run: a user store
 // is wired up, has no accounts, and no legacy password covers for it.
 func (s *Server) setupNeeded() bool {
-	return s.users != nil && s.users.Empty() && s.password == ""
+	return !s.noPassword && s.users != nil && s.users.Empty() && s.password == "" && s.oidc == nil
 }
 
 // authRequired reports whether the request must carry a valid session.
@@ -111,7 +157,7 @@ func (s *Server) authRequired(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/api/login", "/api/auth", "/api/setup":
+	case "/api/login", "/api/auth", "/api/setup", "/api/oidc/login", "/api/oidc/callback":
 		return false
 	}
 	return true
@@ -213,6 +259,10 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		"authenticated": !s.authConfigured() || loggedIn || share,
 		"readOnly":      share || (loggedIn && sess.role == userstore.RoleViewer),
 		"setupNeeded":   s.setupNeeded(),
+		"passwordLogin": !s.noPassword,
+	}
+	if s.oidc != nil {
+		resp["oidc"] = map[string]any{"enabled": true, "name": s.oidc.ProviderName()}
 	}
 	if loggedIn {
 		resp["username"] = sess.user
@@ -250,6 +300,10 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.noPassword {
+		httpError(w, http.StatusForbidden, "username/password login is disabled")
+		return
+	}
 	if !s.authConfigured() {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
 		return
@@ -285,6 +339,70 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, r, s.sess.create(user, role))
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": user, "role": role})
+}
+
+func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
+	if s.oidc == nil {
+		http.NotFound(w, r)
+		return
+	}
+	nonce, err := oidc.RandomToken()
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "could not create OIDC nonce")
+		return
+	}
+	state, err := s.oidcStates.create(nonce)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "could not create OIDC state")
+		return
+	}
+	u, err := s.oidc.AuthCodeURL(r.Context(), s.oidcRedirectURL(r), state, nonce)
+	if err != nil {
+		httpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	http.Redirect(w, r, u, http.StatusFound)
+}
+
+func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	if s.oidc == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if msg := r.URL.Query().Get("error"); msg != "" {
+		httpError(w, http.StatusUnauthorized, "OIDC login failed: "+msg)
+		return
+	}
+	nonce, ok := s.oidcStates.take(r.URL.Query().Get("state"))
+	if !ok {
+		httpError(w, http.StatusBadRequest, "OIDC state is missing or expired")
+		return
+	}
+	claims, err := s.oidc.Exchange(r.Context(), r.URL.Query().Get("code"), s.oidcRedirectURL(r), nonce)
+	if err != nil {
+		httpError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	s.setSessionCookie(w, r, s.sess.create(claims.Username, claims.Role))
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (s *Server) oidcRedirectURL(r *http.Request) string {
+	if s.oidc != nil && s.oidc.RedirectURL() != "" {
+		return s.oidc.RedirectURL()
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto == "http" || proto == "https" {
+		scheme = proto
+	}
+	host := r.Host
+	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
+		host = forwarded
+	}
+	return scheme + "://" + host + "/api/oidc/callback"
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
