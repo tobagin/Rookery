@@ -184,7 +184,9 @@ func readOnlyAllowed(r *http.Request) bool {
 		return false
 	}
 	// No secrets metadata and no account list for read-only principals.
-	return !strings.HasPrefix(r.URL.Path, "/api/secrets") && !strings.HasPrefix(r.URL.Path, "/api/users")
+	return !strings.HasPrefix(r.URL.Path, "/api/secrets") &&
+		!strings.HasPrefix(r.URL.Path, "/api/users") &&
+		!strings.HasPrefix(r.URL.Path, "/api/settings")
 }
 
 /* ---------- read-only share links ----------
@@ -424,8 +426,21 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	s.setSessionCookie(w, r, s.sess.create(claims.Username, claims.Role))
+	user, role := s.resolveOIDCIdentity(claims)
+	s.setSessionCookie(w, r, s.sess.create(user, role))
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (s *Server) resolveOIDCIdentity(claims oidc.Claims) (string, string) {
+	if s.users != nil {
+		emailTrusted := claims.EmailVerified == nil || *claims.EmailVerified
+		if emailTrusted {
+			if u, ok := s.users.GetByEmail(claims.Email); ok {
+				return u.Name, u.Role
+			}
+		}
+	}
+	return claims.Username, claims.Role
 }
 
 func (s *Server) oidcRedirectURL(r *http.Request) string {

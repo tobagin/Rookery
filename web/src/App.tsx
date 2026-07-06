@@ -267,7 +267,8 @@ export function App() {
             <Route path="/updates" element={<AdminOnly><UpdatesView /></AdminOnly>} />
             <Route path="/gpus" element={<GPUsView />} />
             <Route path="/secrets" element={<AdminOnly><SecretsView /></AdminOnly>} />
-            <Route path="/users" element={<AdminOnly><UsersView /></AdminOnly>} />
+            <Route path="/settings" element={<AdminOnly><SettingsView host={host} /></AdminOnly>} />
+            <Route path="/users" element={<Navigate to="/settings" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Shell>
@@ -381,7 +382,7 @@ function navItems(readOnly: boolean) {
     { to: "/gpus", label: "GPUs", icon: Cpu },
     { to: "/import", label: "Import", icon: Import, admin: true },
     { to: "/secrets", label: "Secrets", icon: KeyRound, admin: true },
-    { to: "/users", label: "Users", icon: Users, admin: true },
+    { to: "/settings", label: "Settings", icon: Settings, admin: true },
   ];
   return base.filter((item) => !readOnly || !item.admin);
 }
@@ -1334,24 +1335,43 @@ function SecretsView() {
   );
 }
 
-function UsersView() {
+type LocalUser = { name: string; email?: string; role: string };
+type SettingItem = { key: string; label: string; value: unknown; source: string; locked: boolean; editable: boolean; restartRequired?: boolean };
+type SettingGroup = { name: string; items: SettingItem[] };
+
+function SettingsView({ host }: { host: HostInfo | null }) {
+  const [tab, setTab] = useState("Users");
+  return (
+    <Page title="Settings" kicker="Accounts, authentication, and deployment">
+      <div className="tabs">
+        {["Users", "Authentication", "Deployment", "About"].map((name) => <button key={name} className={`tab ${tab === name ? "active" : ""}`} onClick={() => setTab(name)}>{name}</button>)}
+      </div>
+      {tab === "Users" && <UsersSettings />}
+      {tab !== "Users" && <AppSettings tab={tab} host={host} />}
+    </Page>
+  );
+}
+
+function UsersSettings() {
   const api = useApi();
   const { toast } = useApiContext();
-  const [users, setUsers] = useState<Array<{ name: string; role: string }>>([]);
+  const [users, setUsers] = useState<LocalUser[]>([]);
   const [me, setMe] = useState("");
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("viewer");
   const load = useCallback(async () => {
-    const { body } = await api<{ users?: typeof users; me?: string }>("/api/users");
+    const { body } = await api<{ users?: LocalUser[]; me?: string }>("/api/users");
     setUsers(body.users || []);
     setMe(body.me || "");
   }, [api]);
   useEffect(() => { load().catch((e) => toast((e as Error).message, true)); }, [load, toast]);
   async function create() {
     try {
-      await api("/api/users", { method: "POST", body: JSON.stringify({ username, password, role }) });
+      await api("/api/users", { method: "POST", body: JSON.stringify({ username, password, role, email }) });
       setUsername("");
+      setEmail("");
       setPassword("");
       toast("user created");
       load();
@@ -1369,20 +1389,106 @@ function UsersView() {
       toast((e as Error).message, true);
     }
   }
+  async function updateUser(user: LocalUser, patch: Partial<LocalUser>) {
+    try {
+      await api(`/api/users/${encodeURIComponent(user.name)}`, { method: "PATCH", body: JSON.stringify({ email: patch.email ?? user.email ?? "", role: patch.role ?? user.role }) });
+      toast(`updated ${user.name}`);
+      load();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  async function resetPassword(name: string) {
+    const password = prompt(`New password for ${name}`);
+    if (!password) return;
+    try {
+      await api(`/api/users/${encodeURIComponent(name)}/password`, { method: "POST", body: JSON.stringify({ password }) });
+      toast(`password updated for ${name}`);
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
   return (
-    <Page title="Users" kicker="Admin and viewer accounts">
+    <>
       <Panel title="Accounts" icon={Users}>
-        {users.map((u) => <div className="history-row" key={u.name}><code>{u.name}{u.name === me ? " (you)" : ""}</code><span className={`badge ${u.role === "admin" ? "badge-user" : ""}`}>{u.role}</span><span className="grow" /><button className="btn btn-sm btn-danger" onClick={() => del(u.name)}><Trash2 size={14} /> delete</button></div>)}
+        {users.map((u) => <div className="history-row settings-user-row" key={u.name}>
+          <code>{u.name}{u.name === me ? " (you)" : ""}</code>
+          <input className="input" type="email" placeholder="email" value={u.email || ""} onChange={(e) => setUsers((rows) => rows.map((row) => row.name === u.name ? { ...row, email: e.target.value } : row))} onBlur={() => updateUser(u, { email: u.email || "" })} />
+          <select className="input" value={u.role} onChange={(e) => updateUser(u, { role: e.target.value })}><option value="viewer">viewer</option><option value="admin">admin</option></select>
+          <span className={`badge ${u.role === "admin" ? "badge-user" : ""}`}>{u.role}</span>
+          <span className="grow" />
+          <button className="btn btn-sm" onClick={() => resetPassword(u.name)}><KeyRound size={14} /> reset</button>
+          <button className="btn btn-sm btn-danger" onClick={() => del(u.name)}><Trash2 size={14} /> delete</button>
+        </div>)}
       </Panel>
       <Panel title="Add user" icon={Plus}>
         <div className="filterbar">
           <input className="input" placeholder="username" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input className="input" placeholder="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           <input className="input" placeholder="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
           <select className="input" value={role} onChange={(e) => setRole(e.target.value)}><option value="viewer">viewer</option><option value="admin">admin</option></select>
           <button className="btn btn-accent" onClick={create}><Plus size={16} /> Add</button>
         </div>
       </Panel>
-    </Page>
+    </>
+  );
+}
+
+function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
+  const api = useApi();
+  const { toast } = useApiContext();
+  const [groups, setGroups] = useState<SettingGroup[]>([]);
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [restart, setRestart] = useState(false);
+  const load = useCallback(async () => {
+    const { body } = await api<{ groups?: SettingGroup[] }>("/api/settings");
+    setGroups(body.groups || []);
+    setDraft({});
+  }, [api]);
+  useEffect(() => { load().catch((e) => toast((e as Error).message, true)); }, [load, toast]);
+  const group = groups.find((g) => g.name === tab);
+  async function save() {
+    try {
+      const { body } = await api<{ restartRequired?: boolean }>("/api/settings", { method: "PUT", body: JSON.stringify({ settings: draft }) });
+      setRestart(!!body.restartRequired);
+      toast("settings saved");
+      load();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  if (tab === "About") {
+    const rows: Array<[string, string]> = [
+      ["version", String(group?.items.find((i) => i.key === "version")?.value || "dev")],
+      ["podman", host?.podman?.version || "unknown"],
+      ["SELinux", host?.selinuxEnforcing ? "enforcing" : "not enforcing"],
+      ["validator", host?.generatorAvailable ? "available" : "unavailable"],
+    ];
+    return <Panel title="About" icon={Activity}><InfoGrid rows={rows} /></Panel>;
+  }
+  return (
+    <Panel title={tab} icon={tab === "Authentication" ? Shield : HardDrive} action={Object.keys(draft).length > 0 ? <button className="btn btn-accent" onClick={save}><Save size={16} /> Save</button> : null}>
+      {restart && <p className="banner banner-warn">Restart Rookery to apply saved settings.</p>}
+      <div className="settings-list">
+        {(group?.items || []).map((item) => <SettingControl key={item.key} item={item} value={draft[item.key] ?? item.value} onChange={(value) => setDraft((d) => ({ ...d, [item.key]: value }))} />)}
+      </div>
+    </Panel>
+  );
+}
+
+function SettingControl({ item, value, onChange }: { item: SettingItem; value: unknown; onChange: (value: unknown) => void }) {
+  const disabled = item.locked || !item.editable;
+  const source = item.locked ? `${item.source} locked` : item.source;
+  const boolValue = value === true || value === "true";
+  return (
+    <div className="setting-row">
+      <div><strong>{item.label}</strong><span className="muted">{source}{item.restartRequired ? " · restart" : ""}</span></div>
+      {typeof item.value === "boolean" ? (
+        <label className="switch"><input type="checkbox" checked={boolValue} disabled={disabled} onChange={(e) => onChange(e.target.checked)} /><span /></label>
+      ) : (
+        <input className="input" disabled={disabled} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />
+      )}
+    </div>
   );
 }
 

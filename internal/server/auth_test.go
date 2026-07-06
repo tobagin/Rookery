@@ -367,6 +367,40 @@ func TestOIDCCountsAsConfiguredAuth(t *testing.T) {
 	}
 }
 
+func TestOIDCLoginLinksExistingLocalUserByEmail(t *testing.T) {
+	srv, store := newUsersServer(t)
+	if err := store.CreateWithProfile(userstore.User{
+		Name:  "admin",
+		Email: "owner@example.test",
+		Role:  userstore.RoleAdmin,
+	}, "localpassword1"); err != nil {
+		t.Fatal(err)
+	}
+	user, role := srv.resolveOIDCIdentity(oidc.Claims{
+		Username:          "tobagin",
+		Email:             "OWNER@example.test",
+		PreferredUsername: "tobagin",
+		Role:              userstore.RoleViewer,
+	})
+	if user != "admin" || role != userstore.RoleAdmin {
+		t.Fatalf("resolved OIDC identity = %q/%q, want admin/admin", user, role)
+	}
+	emailUnverified := false
+	user, role = srv.resolveOIDCIdentity(oidc.Claims{
+		Username:      "tobagin",
+		Email:         "owner@example.test",
+		EmailVerified: &emailUnverified,
+		Role:          userstore.RoleViewer,
+	})
+	if user != "tobagin" || role != userstore.RoleViewer {
+		t.Fatalf("unverified OIDC email resolved = %q/%q, want tobagin/viewer", user, role)
+	}
+	user, role = srv.resolveOIDCIdentity(oidc.Claims{Username: "new-sso-user", Role: userstore.RoleViewer})
+	if user != "new-sso-user" || role != userstore.RoleViewer {
+		t.Fatalf("unmatched OIDC identity = %q/%q", user, role)
+	}
+}
+
 func TestDisablePasswordLogin(t *testing.T) {
 	client, err := oidc.New(oidc.Config{
 		Issuer:       "https://idp.example",

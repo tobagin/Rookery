@@ -86,7 +86,10 @@ type Options struct {
 	// SessionTTL is the idle timeout for login sessions (sliding); zero
 	// means 24h.
 	SessionTTL time.Duration
-	SELinux    func() bool // nil -> detect on the host
+	// Settings describes effective deployment/auth/runtime settings for the
+	// admin settings API.
+	Settings []SettingGroup
+	SELinux  func() bool // nil -> detect on the host
 	// GPUs enumerates host GPUs; nil -> gpu.Detect. Injectable for tests.
 	GPUs func(ctx context.Context) []gpu.Device
 	// ResolveDigest fetches an image tag's current registry digest;
@@ -119,6 +122,7 @@ type Server struct {
 	selinux       func() bool
 	gpus          func(ctx context.Context) []gpu.Device
 	sess          *sessions
+	settings      []SettingGroup
 	mux           *http.ServeMux
 }
 
@@ -142,6 +146,7 @@ func New(opts Options) *Server {
 		remotePull:    opts.RemotePull,
 		remoteGPUs:    opts.RemoteGPUs,
 		sess:          newSessions(opts.SessionTTL),
+		settings:      opts.Settings,
 		mux:           http.NewServeMux(),
 	}
 	if s.validate == nil {
@@ -182,8 +187,11 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("POST /api/setup", s.handleSetup)
 	s.mux.HandleFunc("GET /api/users", s.handleListUsers)
 	s.mux.HandleFunc("POST /api/users", s.handleCreateUser)
+	s.mux.HandleFunc("PATCH /api/users/{name}", s.handlePatchUser)
 	s.mux.HandleFunc("DELETE /api/users/{name}", s.handleDeleteUser)
 	s.mux.HandleFunc("POST /api/users/{name}/password", s.handleSetUserPassword)
+	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)
+	s.mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	s.mux.HandleFunc("POST /api/convert", s.handleConvert)
 	s.mux.HandleFunc("GET /api/import/containers", s.handleImportContainers)
 	s.mux.HandleFunc("GET /api/units", s.handleListUnits)

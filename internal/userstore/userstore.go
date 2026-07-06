@@ -1,8 +1,6 @@
-// Package userstore keeps Rookery's local accounts in one JSON file —
-// username, role, and a PBKDF2-SHA256 password hash. It exists so the
-// first-run wizard has somewhere durable to put the admin account without
-// dragging in a database; the file is human-readable and lives next to the
-// rest of the host's config.
+// Package userstore keeps Rookery's local accounts in SQLite: username,
+// role, and a PBKDF2-SHA256 password hash. Open still accepts the old
+// users.json path so existing callers migrate to sibling rookery.db.
 package userstore
 
 import (
@@ -10,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/tobagin/rookery/internal/appdb"
 )
 
 const (
@@ -47,26 +48,40 @@ type User struct {
 	MustSetEmail       bool   `json:"mustSetEmail,omitempty"`
 }
 
-// Store is the accounts file. Safe for concurrent use.
+// Store is the accounts database. Safe for concurrent use.
 type Store struct {
-	mu    sync.Mutex
-	path  string
-	users []User
+	mu         sync.Mutex
+	db         *sql.DB
+	path       string
+	legacyPath string
 }
 
-// Open loads (or prepares to create) the store at path. A missing file is
-// an empty store — that's what triggers the first-run wizard.
+// DB exposes the shared app database for settings and future admin metadata.
+func (s *Store) DB() *sql.DB { return s.db }
+
+// Path returns the effective SQLite database path.
+func (s *Store) Path() string { return s.path }
+
+// Open loads the SQLite store. If path names users.json, rookery.db in the
+// same directory is used and users.json is migrated only when the DB has no
+// users. The JSON file is left untouched as a rollback artifact.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return s, nil
+	dbPath := path
+	legacyPath := ""
+	if filepath.Base(path) == "users.json" {
+		dbPath = filepath.Join(filepath.Dir(path), "rookery.db")
+		legacyPath = path
 	}
+	db, err := appdb.Open(dbPath)
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(data, &s.users); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	s := &Store{db: db, path: dbPath, legacyPath: legacyPath}
+	if legacyPath != "" {
+		if err := s.migrateLegacyJSON(); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -75,16 +90,28 @@ func Open(path string) (*Store, error) {
 func (s *Store) Empty() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.users) == 0
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return true
+	}
+	return n == 0
 }
 
 // List returns usernames and roles (never hashes).
 func (s *Store) List() []User {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]User, len(s.users))
-	for i, u := range s.users {
-		out[i] = publicUser(u)
+	rows, err := s.db.Query(`SELECT username, email, role, must_change_password, must_set_email FROM users ORDER BY username`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.Name, &u.Email, &u.Role, &u.MustChangePassword, &u.MustSetEmail); err == nil {
+			out = append(out, u)
+		}
 	}
 	return out
 }
@@ -118,21 +145,15 @@ func (s *Store) CreateWithProfile(user User, password string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, u := range s.users {
-		if u.Name == name {
+	_, err := s.db.Exec(`INSERT INTO users(username, email, role, salt, hash, must_change_password, must_set_email)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, name, email, role, hex.EncodeToString(salt), hex.EncodeToString(pbkdf2(password, salt)), user.MustChangePassword, user.MustSetEmail)
+	if err != nil {
+		if strings.Contains(err.Error(), "constraint failed") {
 			return fmt.Errorf("user %s already exists", name)
 		}
+		return err
 	}
-	s.users = append(s.users, User{
-		Name:               name,
-		Email:              email,
-		Role:               role,
-		Salt:               hex.EncodeToString(salt),
-		Hash:               hex.EncodeToString(pbkdf2(password, salt)),
-		MustChangePassword: user.MustChangePassword,
-		MustSetEmail:       user.MustSetEmail,
-	})
-	return s.save()
+	return nil
 }
 
 // Delete removes an account. The last admin cannot be deleted — that would
@@ -140,23 +161,29 @@ func (s *Store) CreateWithProfile(user User, password string) error {
 func (s *Store) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	admins, idx := 0, -1
-	for i, u := range s.users {
-		if u.Role == RoleAdmin {
-			admins++
+	var role string
+	if err := s.db.QueryRow(`SELECT role FROM users WHERE username = ?`, name).Scan(&role); err == sql.ErrNoRows {
+		return fmt.Errorf("no such user %s", name)
+	} else if err != nil {
+		return err
+	}
+	if role == RoleAdmin {
+		admins, err := s.adminCount()
+		if err != nil {
+			return err
 		}
-		if u.Name == name {
-			idx = i
+		if admins == 1 {
+			return fmt.Errorf("cannot delete the last admin")
 		}
 	}
-	if idx < 0 {
+	res, err := s.db.Exec(`DELETE FROM users WHERE username = ?`, name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("no such user %s", name)
 	}
-	if s.users[idx].Role == RoleAdmin && admins == 1 {
-		return fmt.Errorf("cannot delete the last admin")
-	}
-	s.users = append(s.users[:idx], s.users[idx+1:]...)
-	return s.save()
+	return nil
 }
 
 // SetPassword replaces name's password.
@@ -170,14 +197,45 @@ func (s *Store) SetPassword(name, password string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, u := range s.users {
-		if u.Name == name {
-			s.users[i].Salt = hex.EncodeToString(salt)
-			s.users[i].Hash = hex.EncodeToString(pbkdf2(password, salt))
-			return s.save()
+	res, err := s.db.Exec(`UPDATE users SET salt = ?, hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE username = ?`,
+		hex.EncodeToString(salt), hex.EncodeToString(pbkdf2(password, salt)), name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no such user %s", name)
+	}
+	return nil
+}
+
+// Update edits account profile fields. The last admin cannot be demoted.
+func (s *Store) Update(name, email, role string) error {
+	email = strings.TrimSpace(email)
+	if email != "" && !emailRe.MatchString(email) {
+		return fmt.Errorf("invalid email")
+	}
+	if role != RoleAdmin && role != RoleViewer {
+		return fmt.Errorf("role must be %s or %s", RoleAdmin, RoleViewer)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var oldRole string
+	if err := s.db.QueryRow(`SELECT role FROM users WHERE username = ?`, name).Scan(&oldRole); err == sql.ErrNoRows {
+		return fmt.Errorf("no such user %s", name)
+	} else if err != nil {
+		return err
+	}
+	if oldRole == RoleAdmin && role == RoleViewer {
+		admins, err := s.adminCount()
+		if err != nil {
+			return err
+		}
+		if admins == 1 {
+			return fmt.Errorf("cannot demote the last admin")
 		}
 	}
-	return fmt.Errorf("no such user %s", name)
+	_, err := s.db.Exec(`UPDATE users SET email = ?, role = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?`, email, role, name)
+	return err
 }
 
 // Verify checks credentials and returns the role. It runs the KDF even for
@@ -194,41 +252,52 @@ func (s *Store) Verify(name, password string) (role string, ok bool) {
 // accepts either the username or the stored email address.
 func (s *Store) VerifyUser(name, password string) (User, bool) {
 	s.mu.Lock()
-	var found *User
-	for i := range s.users {
-		if s.users[i].Name == name || (s.users[i].Email != "" && strings.EqualFold(s.users[i].Email, name)) {
-			found = &s.users[i]
-		}
-	}
+	u, err := s.getPrivateLocked(name)
 	s.mu.Unlock()
-	if found == nil {
+	if err != nil {
 		pbkdf2(password, make([]byte, 16))
 		return User{}, false
 	}
-	salt, err := hex.DecodeString(found.Salt)
+	salt, err := hex.DecodeString(u.Salt)
 	if err != nil {
 		return User{}, false
 	}
-	want, err := hex.DecodeString(found.Hash)
+	want, err := hex.DecodeString(u.Hash)
 	if err != nil {
 		return User{}, false
 	}
 	if subtle.ConstantTimeCompare(pbkdf2(password, salt), want) != 1 {
 		return User{}, false
 	}
-	return publicUser(*found), true
+	return publicUser(u), true
 }
 
 // Get returns public account metadata by username.
 func (s *Store) Get(name string) (User, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, u := range s.users {
-		if u.Name == name {
-			return publicUser(u), true
-		}
+	u, err := s.getPublicLocked(name)
+	if err != nil {
+		return User{}, false
 	}
-	return User{}, false
+	return u, true
+}
+
+// GetByEmail returns public account metadata by email address.
+func (s *Store) GetByEmail(email string) (User, bool) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return User{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var u User
+	err := s.db.QueryRow(`SELECT username, email, role, must_change_password, must_set_email FROM users WHERE email <> '' AND lower(email) = lower(?)`, email).
+		Scan(&u.Name, &u.Email, &u.Role, &u.MustChangePassword, &u.MustSetEmail)
+	if err != nil {
+		return User{}, false
+	}
+	return u, true
 }
 
 // NeedsOnboarding reports whether a local user must complete first-login
@@ -256,17 +325,15 @@ func (s *Store) CompleteOnboarding(name, email, currentPassword, newPassword str
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, u := range s.users {
-		if u.Name == name {
-			s.users[i].Email = email
-			s.users[i].Salt = hex.EncodeToString(salt)
-			s.users[i].Hash = hex.EncodeToString(pbkdf2(newPassword, salt))
-			s.users[i].MustChangePassword = false
-			s.users[i].MustSetEmail = false
-			return s.save()
-		}
+	res, err := s.db.Exec(`UPDATE users SET email = ?, salt = ?, hash = ?, must_change_password = 0, must_set_email = 0, updated_at = CURRENT_TIMESTAMP WHERE username = ?`,
+		email, hex.EncodeToString(salt), hex.EncodeToString(pbkdf2(newPassword, salt)), name)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("no such user %s", name)
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no such user %s", name)
+	}
+	return nil
 }
 
 // Fingerprint digests every account's name, salt, and hash. It keys the
@@ -276,7 +343,16 @@ func (s *Store) Fingerprint() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h := sha256.New()
-	for _, u := range s.users {
+	rows, err := s.db.Query(`SELECT username, role, salt, hash FROM users ORDER BY username`)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.Name, &u.Role, &u.Salt, &u.Hash); err != nil {
+			return ""
+		}
 		fmt.Fprintf(h, "%s:%s:%s:%s\n", u.Name, u.Role, u.Salt, u.Hash)
 	}
 	return hex.EncodeToString(h.Sum(nil))
@@ -292,21 +368,54 @@ func publicUser(u User) User {
 	}
 }
 
-// save writes the file atomically with owner-only permissions. Caller holds
-// the lock.
-func (s *Store) save() error {
-	data, err := json.MarshalIndent(s.users, "", "  ")
+func (s *Store) adminCount() (int, error) {
+	var admins int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = ?`, RoleAdmin).Scan(&admins)
+	return admins, err
+}
+
+func (s *Store) getPublicLocked(name string) (User, error) {
+	var u User
+	err := s.db.QueryRow(`SELECT username, email, role, must_change_password, must_set_email FROM users WHERE username = ?`, name).
+		Scan(&u.Name, &u.Email, &u.Role, &u.MustChangePassword, &u.MustSetEmail)
+	return u, err
+}
+
+func (s *Store) getPrivateLocked(name string) (User, error) {
+	var u User
+	err := s.db.QueryRow(`SELECT username, email, role, salt, hash, must_change_password, must_set_email
+FROM users WHERE username = ? OR (email <> '' AND lower(email) = lower(?))`, name, name).
+		Scan(&u.Name, &u.Email, &u.Role, &u.Salt, &u.Hash, &u.MustChangePassword, &u.MustSetEmail)
+	return u, err
+}
+
+func (s *Store) migrateLegacyJSON() error {
+	if !s.Empty() {
+		return nil
+	}
+	data, err := os.ReadFile(s.legacyPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	var users []User
+	if err := json.Unmarshal(data, &users); err != nil {
+		return fmt.Errorf("%s: %w", s.legacyPath, err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
+	defer tx.Rollback()
+	for _, u := range users {
+		if _, err := tx.Exec(`INSERT INTO users(username, email, role, salt, hash, must_change_password, must_set_email)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, u.Name, strings.TrimSpace(u.Email), u.Role, u.Salt, u.Hash, u.MustChangePassword, u.MustSetEmail); err != nil {
+			return err
+		}
 	}
-	return os.Rename(tmp, s.path)
+	return tx.Commit()
 }
 
 // pbkdf2 is RFC 2898 PBKDF2-HMAC-SHA256 — implemented here because the

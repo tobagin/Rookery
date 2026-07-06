@@ -35,6 +35,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Username string `json:"username"`
+		Email    string `json:"email"`
 		Password string `json:"password"`
 		Role     string `json:"role"`
 	}
@@ -45,7 +46,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "" {
 		req.Role = userstore.RoleViewer
 	}
-	if err := s.users.Create(req.Username, req.Password, req.Role); err != nil {
+	if err := s.users.CreateWithProfile(userstore.User{Name: req.Username, Email: req.Email, Role: req.Role}, req.Password); err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -61,6 +62,37 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": r.PathValue("name")})
+}
+
+func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
+	if !s.usersAvailable(w) {
+		return
+	}
+	var req struct {
+		Email *string `json:"email"`
+		Role  string  `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	current, ok := s.users.Get(r.PathValue("name"))
+	if !ok {
+		httpError(w, http.StatusBadRequest, "no such user "+r.PathValue("name"))
+		return
+	}
+	if req.Role == "" {
+		req.Role = current.Role
+	}
+	email := current.Email
+	if req.Email != nil {
+		email = *req.Email
+	}
+	if err := s.users.Update(r.PathValue("name"), email, req.Role); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"updated": r.PathValue("name")})
 }
 
 func (s *Server) handleSetUserPassword(w http.ResponseWriter, r *http.Request) {

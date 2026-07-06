@@ -112,6 +112,7 @@ type Claims struct {
 	IssuedAt          int64    `json:"iat"`
 	Nonce             string   `json:"nonce"`
 	Email             string   `json:"email"`
+	EmailVerified     *bool    `json:"email_verified"`
 	PreferredUsername string   `json:"preferred_username"`
 	Name              string   `json:"name"`
 	Groups            []string `json:"groups"`

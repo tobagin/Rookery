@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/tobagin/rookery/internal/alert"
+	"github.com/tobagin/rookery/internal/appdb"
 	"github.com/tobagin/rookery/internal/gitstore"
 	"github.com/tobagin/rookery/internal/oidc"
 	"github.com/tobagin/rookery/internal/podman"
@@ -58,6 +60,7 @@ func main() {
 		"idle timeout for login sessions (sliding)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	flagSet := visitedFlags()
 
 	if *showVersion {
 		fmt.Println("rookery", version)
@@ -68,10 +71,49 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	accounts, err := userstore.Open(filepath.Join(resolveDataDir(*dataDir), "users.json"))
+	effectiveDataDir := resolveDataDir(*dataDir)
+	accounts, err := userstore.Open(filepath.Join(effectiveDataDir, "users.json"))
 	if err != nil {
 		log.Fatal(err)
 	}
+	dbSettings, err := appdb.GetSettings(accounts.DB())
+	if err != nil {
+		log.Fatal(err)
+	}
+	dbApplied := applyDBSettings(dbSettings, flagSet, map[string]string{
+		"managedUsers":         "users",
+		"remotes":              "remotes",
+		"alerts":               "alerts",
+		"oidcIssuer":           "oidc-issuer",
+		"oidcClientID":         "oidc-client-id",
+		"oidcRedirectURL":      "oidc-redirect-url",
+		"oidcName":             "oidc-name",
+		"oidcAdmins":           "oidc-admins",
+		"oidcAdminGroups":      "oidc-admin-groups",
+		"oidcDefaultRole":      "oidc-default-role",
+		"disablePasswordLogin": "disable-password-login",
+		"gitTracking":          "git",
+		"sessionTTL":           "session-ttl",
+	}, map[string]string{
+		"managedUsers":         "ROOKERY_USERS",
+		"remotes":              "ROOKERY_REMOTES",
+		"alerts":               "ROOKERY_ALERTS",
+		"oidcIssuer":           "ROOKERY_OIDC_ISSUER",
+		"oidcClientID":         "ROOKERY_OIDC_CLIENT_ID",
+		"oidcRedirectURL":      "ROOKERY_OIDC_REDIRECT_URL",
+		"oidcName":             "ROOKERY_OIDC_NAME",
+		"oidcAdmins":           "ROOKERY_OIDC_ADMINS",
+		"oidcAdminGroups":      "ROOKERY_OIDC_ADMIN_GROUPS",
+		"oidcDefaultRole":      "ROOKERY_OIDC_DEFAULT_ROLE",
+		"disablePasswordLogin": "ROOKERY_DISABLE_PASSWORD_LOGIN",
+		"gitTracking":          "ROOKERY_GIT",
+		"sessionTTL":           "ROOKERY_SESSION_TTL",
+	}, map[string]any{
+		"managedUsers": users, "remotes": remotes, "alerts": alerts,
+		"oidcIssuer": oidcIssuer, "oidcClientID": oidcClientID, "oidcRedirectURL": oidcRedirectURL,
+		"oidcName": oidcName, "oidcAdmins": oidcAdmins, "oidcAdminGroups": oidcAdminGroups, "oidcDefaultRole": oidcDefaultRole,
+		"disablePasswordLogin": disablePasswordLogin, "gitTracking": gitFlag, "sessionTTL": sessionTTL,
+	})
 	oidcClient, err := oidc.New(oidc.Config{
 		Issuer:       *oidcIssuer,
 		ClientID:     *oidcClientID,
@@ -125,6 +167,7 @@ func main() {
 		DisablePasswordLogin: *disablePasswordLogin,
 		OIDC:                 oidcClient,
 		SessionTTL:           *sessionTTL,
+		Settings:             buildSettings(effectiveDataDir, accounts.Path(), *listen, *users, *remotes, *alerts, *gitFlag, *sessionTTL, *disablePasswordLogin, *oidcIssuer, *oidcClientID, *oidcRedirectURL, *oidcName, *oidcAdmins, *oidcAdminGroups, *oidcDefaultRole, flagSet, dbApplied),
 	})
 
 	if *alerts != "" {
@@ -200,6 +243,109 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+func visitedFlags() map[string]bool {
+	out := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { out[f.Name] = true })
+	return out
+}
+
+func applyDBSettings(settings []appdb.Setting, flagSet map[string]bool, flagNames, envNames map[string]string, targets map[string]any) map[string]bool {
+	byKey := map[string]json.RawMessage{}
+	for _, s := range settings {
+		if s.Source == "db" && !s.Locked {
+			byKey[s.Key] = s.Value
+		}
+	}
+	applied := map[string]bool{}
+	for key, target := range targets {
+		if flagSet[flagNames[key]] || os.Getenv(envNames[key]) != "" {
+			continue
+		}
+		raw, ok := byKey[key]
+		if !ok {
+			continue
+		}
+		switch p := target.(type) {
+		case *string:
+			var v string
+			if json.Unmarshal(raw, &v) == nil {
+				*p = v
+				applied[key] = true
+			}
+		case *bool:
+			var v bool
+			if json.Unmarshal(raw, &v) == nil {
+				*p = v
+				applied[key] = true
+			}
+		case *time.Duration:
+			var v string
+			if json.Unmarshal(raw, &v) == nil {
+				if d, err := time.ParseDuration(v); err == nil {
+					*p = d
+					applied[key] = true
+				}
+			}
+		}
+	}
+	return applied
+}
+
+func buildSettings(dataDir, dbPath, listen, users, remotes, alerts string, gitTracking bool, sessionTTL time.Duration, disablePasswordLogin bool, oidcIssuer, oidcClientID, oidcRedirectURL, oidcName, oidcAdmins, oidcAdminGroups, oidcDefaultRole string, flagSet map[string]bool, dbApplied map[string]bool) []server.SettingGroup {
+	source := func(key, flagName, envName string) (string, bool) {
+		switch {
+		case flagSet[flagName]:
+			return "flag", true
+		case os.Getenv(envName) != "":
+			return "env", true
+		case dbApplied[key]:
+			return "db", false
+		default:
+			return "default", false
+		}
+	}
+	item := func(key, label string, value any, flagName, envName string, editable bool) server.SettingItem {
+		src, locked := source(key, flagName, envName)
+		return server.SettingItem{
+			Key:             key,
+			Label:           label,
+			Value:           value,
+			Source:          src,
+			Locked:          locked,
+			Editable:        editable,
+			RestartRequired: editable,
+		}
+	}
+	runtime := func(key, label string, value any, src string) server.SettingItem {
+		return server.SettingItem{Key: key, Label: label, Value: value, Source: src, Locked: true, Editable: false}
+	}
+	return []server.SettingGroup{
+		{Name: "Authentication", Items: []server.SettingItem{
+			item("disablePasswordLogin", "Password login disabled", disablePasswordLogin, "disable-password-login", "ROOKERY_DISABLE_PASSWORD_LOGIN", true),
+			item("oidcIssuer", "OIDC issuer", oidcIssuer, "oidc-issuer", "ROOKERY_OIDC_ISSUER", true),
+			item("oidcClientID", "OIDC client ID", oidcClientID, "oidc-client-id", "ROOKERY_OIDC_CLIENT_ID", true),
+			item("oidcRedirectURL", "OIDC redirect URL", oidcRedirectURL, "oidc-redirect-url", "ROOKERY_OIDC_REDIRECT_URL", true),
+			item("oidcName", "OIDC provider name", oidcName, "oidc-name", "ROOKERY_OIDC_NAME", true),
+			item("oidcAdmins", "OIDC admin users", oidcAdmins, "oidc-admins", "ROOKERY_OIDC_ADMINS", true),
+			item("oidcAdminGroups", "OIDC admin groups", oidcAdminGroups, "oidc-admin-groups", "ROOKERY_OIDC_ADMIN_GROUPS", true),
+			item("oidcDefaultRole", "OIDC default role", oidcDefaultRole, "oidc-default-role", "ROOKERY_OIDC_DEFAULT_ROLE", true),
+		}},
+		{Name: "Deployment", Items: []server.SettingItem{
+			runtime("listen", "Listen address", listen, "runtime"),
+			runtime("dataDir", "Data directory", dataDir, "runtime"),
+			runtime("dbPath", "Database path", dbPath, "runtime"),
+			item("managedUsers", "Managed local users", users, "users", "ROOKERY_USERS", true),
+			item("remotes", "Remote hosts", remotes, "remotes", "ROOKERY_REMOTES", true),
+			item("gitTracking", "Git tracking default", gitTracking, "git", "ROOKERY_GIT", true),
+			item("alerts", "Failure alerts", alerts, "alerts", "ROOKERY_ALERTS", true),
+			item("sessionTTL", "Session TTL", sessionTTL.String(), "session-ttl", "ROOKERY_SESSION_TTL", true),
+		}},
+		{Name: "About", Items: []server.SettingItem{
+			runtime("version", "Version", version, "build"),
+		}},
+	}
 }
 
 // discoverQuadletUsers scans passwd for human accounts (uid >= 1000, not

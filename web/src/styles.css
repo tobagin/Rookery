@@ -183,6 +183,28 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
   display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid var(--border); flex-wrap: wrap;
 }
 .history-row:last-child, .gpu-row:last-child { border-bottom: 0; }
+.settings-user-row .input { min-width: 160px; }
+.settings-list { display: flex; flex-direction: column; gap: 0; }
+.setting-row {
+  display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 420px); align-items: center; gap: 12px;
+  padding: 10px 4px; border-bottom: 1px solid var(--border);
+}
+.setting-row:last-child { border-bottom: 0; }
+.setting-row strong { display: block; font-weight: 650; }
+.setting-row .muted { display: block; font-size: 12px; }
+.switch { display: inline-flex; justify-content: flex-end; }
+.switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch span {
+  width: 44px; height: 24px; border-radius: 999px; border: 1px solid var(--border); background: var(--input);
+  position: relative; display: inline-block;
+}
+.switch span:before {
+  content: ""; position: absolute; width: 18px; height: 18px; left: 2px; top: 2px; border-radius: 50%;
+  background: var(--text-2); transition: transform .16s ease, background .16s ease;
+}
+.switch input:checked + span { border-color: rgba(47,129,247,.65); background: rgba(47,129,247,.22); }
+.switch input:checked + span:before { transform: translateX(20px); background: var(--accent-2); }
+.switch input:disabled + span { opacity: .55; }
 .gpu-row { display: grid; grid-template-columns: minmax(220px, 1fr) 1fr 1fr; }
 .gpu-name { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .action-grid { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -227,6 +249,7 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
   .badges, .row-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .row-actions .btn { min-width: 44px; min-height: 40px; }
   .gpu-row { grid-template-columns: 1fr; }
+  .setting-row { grid-template-columns: 1fr; }
   .info-grid { grid-template-columns: 92px 1fr; }
   .top-actions .btn-ghost { display: none; }
 }

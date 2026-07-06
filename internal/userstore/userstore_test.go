@@ -69,6 +69,9 @@ func TestStoreRoundTrip(t *testing.T) {
 	if u, ok := s2.VerifyUser("owner@example.test", "newtemporarypass"); !ok || u.Email != "owner@example.test" {
 		t.Errorf("updated email login failed: %#v %v", u, ok)
 	}
+	if u, ok := s2.GetByEmail("OWNER@example.test"); !ok || u.Name != "bootstrap" || u.Role != RoleAdmin {
+		t.Errorf("GetByEmail = %#v, %v", u, ok)
+	}
 	if _, ok := s2.Verify("admin", "wrongpass"); ok {
 		t.Error("wrong password verified")
 	}
@@ -76,12 +79,13 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Error("unknown user verified")
 	}
 
-	// File must be private and never contain a plaintext password.
-	st, _ := os.Stat(path)
+	// Database must be private and never contain a plaintext password.
+	dbPath := filepath.Join(filepath.Dir(path), "rookery.db")
+	st, _ := os.Stat(dbPath)
 	if st.Mode().Perm() != 0o600 {
-		t.Errorf("users file mode = %v, want 0600", st.Mode().Perm())
+		t.Errorf("database mode = %v, want 0600", st.Mode().Perm())
 	}
-	raw, _ := os.ReadFile(path)
+	raw, _ := os.ReadFile(dbPath)
 	if strings.Contains(string(raw), "hunter2hunter2") {
 		t.Error("plaintext password on disk")
 	}
