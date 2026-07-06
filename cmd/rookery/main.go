@@ -91,25 +91,9 @@ func main() {
 	if *disablePasswordLogin && oidcClient == nil {
 		log.Fatal("-disable-password-login requires OIDC to be configured")
 	}
-	if accounts.Empty() && oidcClient == nil && !*disablePasswordLogin {
-		bootstrapPassword := password
-		generated := false
-		if bootstrapPassword == "" {
-			bootstrapPassword, err = temporaryPassword()
-			if err != nil {
-				log.Fatal(err)
-			}
-			generated = true
-		}
-		if err := accounts.CreateWithProfile(userstore.User{
-			Name:               "admin",
-			Email:              "admin@example.com",
-			Role:               userstore.RoleAdmin,
-			MustChangePassword: generated,
-			MustSetEmail:       true,
-		}, bootstrapPassword); err != nil {
-			log.Fatal(err)
-		}
+	if created, generated, bootstrapPassword, err := bootstrapInitialAdmin(accounts, password, *disablePasswordLogin); err != nil {
+		log.Fatal(err)
+	} else if created {
 		if generated {
 			log.Printf("created initial admin account: username admin, temporary password %q", bootstrapPassword)
 			log.Printf("sign in at http://%s and change the email/password before using Rookery", *listen)
@@ -280,6 +264,31 @@ func temporaryPassword() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func bootstrapInitialAdmin(accounts *userstore.Store, password string, disablePasswordLogin bool) (created, generated bool, bootstrapPassword string, err error) {
+	if accounts == nil || !accounts.Empty() || disablePasswordLogin {
+		return false, false, "", nil
+	}
+	bootstrapPassword = password
+	if bootstrapPassword == "" {
+		bootstrapPassword, err = temporaryPassword()
+		if err != nil {
+			return false, false, "", err
+		}
+		generated = true
+	}
+	err = accounts.CreateWithProfile(userstore.User{
+		Name:               "admin",
+		Email:              "admin@example.com",
+		Role:               userstore.RoleAdmin,
+		MustChangePassword: generated,
+		MustSetEmail:       true,
+	}, bootstrapPassword)
+	if err != nil {
+		return false, false, "", err
+	}
+	return true, generated, bootstrapPassword, nil
 }
 
 // resolveDataDir picks where rookery's own files (users.json) live.

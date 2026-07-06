@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tobagin/rookery/internal/userstore"
 )
 
 func TestDiscoverQuadletUsers(t *testing.T) {
@@ -33,5 +35,57 @@ func TestDiscoverQuadletUsers(t *testing.T) {
 	}
 	if got := discoverQuadletUsers(filepath.Join(root, "missing")); got != nil {
 		t.Errorf("missing passwd = %v, want nil", got)
+	}
+}
+
+func TestBootstrapInitialAdmin(t *testing.T) {
+	store, err := userstore.Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, generated, pass, err := bootstrapInitialAdmin(store, "configured-pass", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || generated || pass != "configured-pass" {
+		t.Fatalf("bootstrap with configured password = created %t generated %t pass %q", created, generated, pass)
+	}
+	if u, ok := store.Get("admin"); !ok || u.Email != "admin@example.com" || !u.MustSetEmail || u.MustChangePassword {
+		t.Fatalf("admin bootstrap profile = %#v, %v", u, ok)
+	}
+
+	created, _, _, err = bootstrapInitialAdmin(store, "ignored-pass", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created {
+		t.Fatal("bootstrap recreated admin in non-empty store")
+	}
+
+	disabled, err := userstore.Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, _, _, err = bootstrapInitialAdmin(disabled, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created {
+		t.Fatal("bootstrap created local admin with password login disabled")
+	}
+
+	generatedStore, err := userstore.Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, generated, pass, err = bootstrapInitialAdmin(generatedStore, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || !generated || len(pass) < 8 {
+		t.Fatalf("bootstrap generated password = created %t generated %t pass %q", created, generated, pass)
+	}
+	if u, ok := generatedStore.Get("admin"); !ok || !u.MustChangePassword || !u.MustSetEmail {
+		t.Fatalf("generated bootstrap profile = %#v, %v", u, ok)
 	}
 }

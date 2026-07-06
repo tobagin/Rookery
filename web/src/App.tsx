@@ -20,6 +20,8 @@ import {
   Logs,
   Menu,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plus,
   RefreshCw,
@@ -276,7 +278,7 @@ export function App() {
 }
 
 function Splash() {
-  return <main className="splash"><div className="seal">RO</div><p className="muted">Loading Rookery...</p></main>;
+  return <main className="splash"><BrandMark /><p className="muted">Loading Rookery...</p></main>;
 }
 
 function ToastStack({ toasts }: { toasts: Toast[] }) {
@@ -294,7 +296,12 @@ function Shell({ host, reloadAuth, children }: { host: HostInfo | null; reloadAu
   const api = useApi();
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("rookery-sidebar") === "collapsed");
   const nav = navItems(auth.readOnly);
+
+  useEffect(() => {
+    localStorage.setItem("rookery-sidebar", sidebarCollapsed ? "collapsed" : "expanded");
+  }, [sidebarCollapsed]);
 
   async function logout() {
     try {
@@ -317,13 +324,18 @@ function Shell({ host, reloadAuth, children }: { host: HostInfo | null; reloadAu
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
-        <Link to="/" className="brand"><span className="brand-mark">RO</span><span>Rookery</span></Link>
+        <div className="sidebar-brand-row">
+          <Link to="/" className="brand" title="Rookery"><BrandMark /><span className="brand-text">Rookery</span></Link>
+          <button className="btn icon-only collapse-btn" onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>
+            {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
+        </div>
         <nav className="side-nav">{nav.map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} />)}</nav>
         <div className="sidebar-foot">
-          {auth.username && <span className="user-chip"><UserRound size={14} />{auth.username}{auth.readOnly ? " (view)" : ""}</span>}
-          {auth.required && auth.authenticated && <button className="icon-line" onClick={logout}><LogOut size={15} /> Log out</button>}
+          {auth.username && <span className="user-chip" title={auth.username}><UserRound size={14} /><span>{auth.username}{auth.readOnly ? " (view)" : ""}</span></span>}
+          {auth.required && auth.authenticated && <button className="icon-line" onClick={logout} title="Log out"><LogOut size={15} /><span>Log out</span></button>}
         </div>
       </aside>
       <div className="workbench">
@@ -377,7 +389,7 @@ function navItems(readOnly: boolean) {
 function NavLinkItem({ item, active, compact, onClick }: { item: { to: string; label: string; icon: React.ElementType }; active: boolean; compact?: boolean; onClick?: () => void }) {
   const Icon = item.icon;
   return (
-    <Link onClick={onClick} className={`${compact ? "bottom-link" : "nav-link"} ${active ? "active" : ""}`} to={item.to}>
+    <Link onClick={onClick} className={`${compact ? "bottom-link" : "nav-link"} ${active ? "active" : ""}`} to={item.to} title={item.label}>
       <Icon size={compact ? 20 : 17} />
       <span>{item.label}</span>
     </Link>
@@ -387,6 +399,10 @@ function NavLinkItem({ item, active, compact, onClick }: { item: { to: string; l
 function isActive(pathname: string, to: string) {
   if (to === "/") return pathname === "/";
   return pathname === to || pathname.startsWith(`${to}/`);
+}
+
+function BrandMark() {
+  return <span className="brand-mark" aria-hidden="true">🦭</span>;
 }
 
 function LoginView({ reloadAuth }: { reloadAuth: () => Promise<void> }) {
@@ -409,7 +425,7 @@ function LoginView({ reloadAuth }: { reloadAuth: () => Promise<void> }) {
   return (
     <main className="auth-page">
       <section className="auth-card">
-        <div className="brand large"><span className="brand-mark">RO</span><span>Rookery</span></div>
+        <div className="brand large"><BrandMark /><span>Rookery</span></div>
         <p className="muted">Sign in to manage this host's Quadlets.</p>
         {auth.oidc?.enabled && <a className="btn btn-accent full" href="/api/oidc/login">Sign in with {auth.oidc.name || "SSO"}</a>}
         {auth.oidc?.enabled && auth.passwordLogin && <div className="separator"><span>or</span></div>}
@@ -449,7 +465,7 @@ function SetupView({ reloadAuth }: { reloadAuth: () => Promise<void> }) {
   return (
     <main className="auth-page">
       <section className="auth-card">
-        <div className="brand large"><span className="brand-mark">RO</span><span>Welcome to Rookery</span></div>
+        <div className="brand large"><BrandMark /><span>Welcome to Rookery</span></div>
         <p className="muted">Create the first admin account stored on this host.</p>
         <form onSubmit={submit} className="stack-form">
           <input className="input" placeholder="Username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
@@ -494,7 +510,7 @@ function OnboardingView({ reloadAuth }: { reloadAuth: () => Promise<void> }) {
   return (
     <main className="auth-page">
       <section className="auth-card">
-        <div className="brand large"><span className="brand-mark">RO</span><span>Finish setup</span></div>
+        <div className="brand large"><BrandMark /><span>Finish setup</span></div>
         <p className="muted">Update the admin email and replace the temporary or configured first-login password.</p>
         <form onSubmit={submit} className="stack-form">
           <input className="input" placeholder="Admin email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
