@@ -262,7 +262,7 @@ func (c *Client) VerifyIDToken(ctx context.Context, raw, nonce string) (Claims, 
 }
 
 func (c *Client) validateClaims(claims Claims, nonce string) error {
-	if claims.Issuer != c.cfg.Issuer {
+	if !issuerEqual(claims.Issuer, c.cfg.Issuer) {
 		return fmt.Errorf("id_token issuer %q does not match %q", claims.Issuer, c.cfg.Issuer)
 	}
 	if claims.Subject == "" {
@@ -367,7 +367,7 @@ func (c *Client) discovery(ctx context.Context) (discovery, error) {
 	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&d); err != nil {
 		return discovery{}, err
 	}
-	if d.Issuer != c.cfg.Issuer {
+	if !issuerEqual(d.Issuer, c.cfg.Issuer) {
 		return discovery{}, fmt.Errorf("oidc discovery issuer %q does not match %q", d.Issuer, c.cfg.Issuer)
 	}
 	if d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" || d.JWKSURI == "" {
@@ -477,6 +477,10 @@ func rsaKey(k jwk) (*rsa.PublicKey, error) {
 		return nil, errors.New("RSA exponent is zero")
 	}
 	return &rsa.PublicKey{N: new(big.Int).SetBytes(nb), E: e}, nil
+}
+
+func issuerEqual(a, b string) bool {
+	return strings.TrimRight(a, "/") == strings.TrimRight(b, "/")
 }
 
 func RandomToken() (string, error) {

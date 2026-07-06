@@ -170,6 +170,48 @@ func TestPartialConfigFails(t *testing.T) {
 	}
 }
 
+func TestIssuerTrailingSlashIsAccepted(t *testing.T) {
+	key := testKey(t)
+	now := time.Unix(1_700_000_000, 0)
+	var issuer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			writeTestJSON(w, map[string]any{
+				"issuer":                 issuer + "/",
+				"authorization_endpoint": issuer + "/auth",
+				"token_endpoint":         issuer + "/token",
+				"jwks_uri":               issuer + "/jwks",
+			})
+		case "/jwks":
+			writeTestJSON(w, map[string]any{"keys": []any{testJWK(&key.PublicKey, "k1")}})
+		case "/token":
+			idToken := signTestJWT(t, key, "k1", map[string]any{
+				"iss": issuer + "/", "sub": "u", "aud": "rookery",
+				"exp": now.Add(time.Hour).Unix(), "nonce": "n",
+			})
+			writeTestJSON(w, map[string]any{"id_token": idToken})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	issuer = srv.URL
+	client, err := New(Config{
+		Issuer:       issuer,
+		ClientID:     "rookery",
+		ClientSecret: "secret",
+		HTTPClient:   srv.Client(),
+		Now:          func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Exchange(context.Background(), "code", "https://r/cb", "n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
