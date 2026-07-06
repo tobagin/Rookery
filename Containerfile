@@ -2,11 +2,19 @@
 # packaging/rookery.service; see packaging/rookery.container for running this
 # image as a Quadlet with the required mounts.
 
+FROM --platform=$BUILDPLATFORM docker.io/library/node:22 AS webbuild
+WORKDIR /src/web
+COPY web/package*.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.24 AS build
 ARG TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
 COPY . .
+COPY --from=webbuild /src/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /rookery ./cmd/rookery
 

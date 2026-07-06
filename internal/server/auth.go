@@ -157,7 +157,7 @@ func (s *Server) authRequired(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/api/login", "/api/auth", "/api/setup", "/api/oidc/login", "/api/oidc/callback":
+	case "/api/login", "/api/auth", "/api/setup", "/api/onboarding", "/api/oidc/login", "/api/oidc/callback":
 		return false
 	}
 	return true
@@ -254,12 +254,21 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	sess, loggedIn := s.session(r)
 	share := s.authConfigured() && !loggedIn && s.shareAccess(r)
+	onboarding := false
+	email := ""
+	if loggedIn && s.users != nil {
+		if u, ok := s.users.Get(sess.user); ok {
+			onboarding = u.MustChangePassword || u.MustSetEmail
+			email = u.Email
+		}
+	}
 	resp := map[string]any{
 		"required":      s.authConfigured(),
 		"authenticated": !s.authConfigured() || loggedIn || share,
 		"readOnly":      share || (loggedIn && sess.role == userstore.RoleViewer),
 		"setupNeeded":   s.setupNeeded(),
 		"passwordLogin": !s.noPassword,
+		"onboarding":    onboarding,
 	}
 	if s.oidc != nil {
 		resp["oidc"] = map[string]any{"enabled": true, "name": s.oidc.ProviderName()}
@@ -267,6 +276,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if loggedIn {
 		resp["username"] = sess.user
 		resp["role"] = sess.role
+		resp["email"] = email
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -319,8 +329,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	user, role, ok := "", "", false
 	if s.users != nil && !s.users.Empty() {
-		if r, valid := s.users.Verify(req.Username, req.Password); valid {
-			user, role, ok = req.Username, r, true
+		if u, valid := s.users.VerifyUser(req.Username, req.Password); valid {
+			user, role, ok = u.Name, u.Role, true
 		}
 	}
 	if !ok && s.password != "" {
@@ -338,7 +348,38 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, r, s.sess.create(user, role))
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": user, "role": role})
+	onboarding := s.users != nil && s.users.NeedsOnboarding(user)
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": user, "role": role, "onboarding": onboarding})
+}
+
+func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
+	sess, loggedIn := s.session(r)
+	if !loggedIn {
+		httpError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if s.users == nil {
+		httpError(w, http.StatusServiceUnavailable, "no local user store configured")
+		return
+	}
+	if !s.users.NeedsOnboarding(sess.user) {
+		writeJSON(w, http.StatusOK, map[string]any{"updated": sess.user})
+		return
+	}
+	var req struct {
+		Email           string `json:"email"`
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := s.users.CompleteOnboarding(sess.user, req.Email, req.CurrentPassword, req.NewPassword); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"updated": sess.user})
 }
 
 func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {

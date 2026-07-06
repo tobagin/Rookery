@@ -1,21 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Rookery</title>
-  <link rel="stylesheet" href="/style.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦭</text></svg>">
-</head>
-<body>
-  <header>
-    <a class="brand" href="#/">🦭 Rookery</a>
-    <div id="hoststrip" class="hoststrip"></div>
-    <a class="btn btn-accent" href="#/new">＋ New unit</a>
-    <button class="btn" id="menu-btn" aria-label="menu" aria-haspopup="true">☰</button>
-  </header>
-  <nav id="menu" class="menu" hidden></nav>
-  <main id="app"><p class="muted">Loading…</p></main>
-  <script src="/app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rookery</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A6%AD%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

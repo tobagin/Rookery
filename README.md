@@ -82,15 +82,18 @@ lose nothing — the files on disk *are* the state.
 - **Secrets** — list `podman secret`s with the units that reference them,
   create and delete from the browser (delete refuses while referenced);
   the editor inserts `Secret=` lines from a picker. Values are write-only.
-- **Mobile-responsive** — passes the "restart it from the couch" test.
-- **One static binary** — amd64 + arm64, zero dependencies outside the Go
-  standard library; the web UI is embedded vanilla JS, no Node toolchain.
+- **Mobile-responsive operations UI** — a dense React console with desktop
+  sidebar navigation, mobile bottom tabs, and a "restart it from the couch"
+  triage path.
+- **One static binary at runtime** — amd64 + arm64, zero runtime dependencies
+  outside the Go standard library; the web UI is built with Vite and embedded
+  into the binary.
 
 ## Quick start
 
 ```sh
 git clone https://github.com/tobagin/rookery && cd rookery
-make build          # or: go build ./cmd/rookery
+make build          # builds the Vite UI, then go build ./cmd/rookery
 ./rookery           # → http://127.0.0.1:7665
 ```
 
@@ -98,11 +101,13 @@ Run it rootless to manage your own `~/.config/containers/systemd/`, or
 rootful to manage `/etc/containers/systemd/` (add `-users alice` to also
 manage alice's rootless units).
 
-> The first visit runs a setup wizard that creates the admin account —
-> complete it **before** exposing Rookery beyond `127.0.0.1`, and put TLS in
-> front of it (reverse proxy) — the built-in server speaks plain HTTP.
-> (`ROOKERY_PASSWORD` / `-password-file` still work as a wizard-free legacy
-> single-admin mode.)
+> On a fresh install, Rookery creates the initial `admin` account at startup.
+> If no password is provided, it prints a temporary password to the process
+> output/container logs. Sign in with `admin`, then complete the first-login
+> setup screen to set the admin email and replace the temporary password.
+> (`ROOKERY_PASSWORD` / `-password-file` can provide the initial password; the
+> first login will still ask for the admin email.) Put TLS in front of Rookery
+> before exposing it beyond `127.0.0.1` — the built-in server speaks plain HTTP.
 
 ### Configuration
 

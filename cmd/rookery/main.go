@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -89,12 +91,33 @@ func main() {
 	if *disablePasswordLogin && oidcClient == nil {
 		log.Fatal("-disable-password-login requires OIDC to be configured")
 	}
-	if password == "" && accounts.Empty() && oidcClient == nil && !*disablePasswordLogin {
-		if isLoopback(*listen) {
-			log.Printf("no credentials yet — open http://%s to run the first-run setup", *listen)
-		} else {
-			log.Printf("WARNING: no credentials configured while listening on %s — anyone who can reach this port controls your containers until the first-run setup completes.", *listen)
+	if accounts.Empty() && oidcClient == nil && !*disablePasswordLogin {
+		bootstrapPassword := password
+		generated := false
+		if bootstrapPassword == "" {
+			bootstrapPassword, err = temporaryPassword()
+			if err != nil {
+				log.Fatal(err)
+			}
+			generated = true
 		}
+		if err := accounts.CreateWithProfile(userstore.User{
+			Name:               "admin",
+			Email:              "admin@example.com",
+			Role:               userstore.RoleAdmin,
+			MustChangePassword: generated,
+			MustSetEmail:       true,
+		}, bootstrapPassword); err != nil {
+			log.Fatal(err)
+		}
+		if generated {
+			log.Printf("created initial admin account: username admin, temporary password %q", bootstrapPassword)
+			log.Printf("sign in at http://%s and change the email/password before using Rookery", *listen)
+		} else {
+			log.Printf("created initial admin account from configured password: username admin")
+			log.Printf("sign in at http://%s and set the admin email before using Rookery", *listen)
+		}
+		password = ""
 	}
 
 	areas, err := detectAreas(*users)
@@ -249,6 +272,14 @@ func envBoolOr(key string, fallback bool) bool {
 		log.Printf("WARNING: %s=%q is not a boolean; using %t", key, os.Getenv(key), fallback)
 		return fallback
 	}
+}
+
+func temporaryPassword() (string, error) {
+	buf := make([]byte, 18)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
 // resolveDataDir picks where rookery's own files (users.json) live.

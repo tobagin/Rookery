@@ -230,6 +230,39 @@ func TestSetupWizardFlow(t *testing.T) {
 	loginCookie(t, srv, "tobagin", "longpassword")
 }
 
+func TestOnboardingBlocksAPIsUntilProfileUpdated(t *testing.T) {
+	srv, store := newUsersServer(t)
+	if err := store.CreateWithProfile(userstore.User{
+		Name:               "admin",
+		Email:              "admin@example.com",
+		Role:               userstore.RoleAdmin,
+		MustChangePassword: true,
+		MustSetEmail:       true,
+	}, "temporarypass"); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, srv, "admin@example.com", "temporarypass")
+	if rec := doAs(t, srv, cookie, "GET", "/api/units", ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("pre-onboarding units: %d, want 403", rec.Code)
+	}
+	rec := doAs(t, srv, cookie, "GET", "/api/auth", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"onboarding":true`) {
+		t.Fatalf("auth onboarding status: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doAs(t, srv, cookie, "POST", "/api/onboarding",
+		`{"email":"owner@example.test","currentPassword":"wrong","newPassword":"newadminpass"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("wrong current password: %d, want 400", rec.Code)
+	}
+	if rec := doAs(t, srv, cookie, "POST", "/api/onboarding",
+		`{"email":"owner@example.test","currentPassword":"temporarypass","newPassword":"newadminpass"}`); rec.Code != http.StatusOK {
+		t.Fatalf("complete onboarding: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doAs(t, srv, cookie, "GET", "/api/units", ""); rec.Code != http.StatusOK {
+		t.Fatalf("post-onboarding units: %d, want 200", rec.Code)
+	}
+	loginCookie(t, srv, "owner@example.test", "newadminpass")
+}
+
 func TestViewerRoleIsReadOnly(t *testing.T) {
 	srv, store := newUsersServer(t)
 	if err := store.Create("boss", "adminpass123", userstore.RoleAdmin); err != nil {

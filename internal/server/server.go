@@ -173,6 +173,7 @@ func New(opts Options) *Server {
 	}
 	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/onboarding", s.handleOnboarding)
 	s.mux.HandleFunc("GET /api/oidc/login", s.handleOIDCLogin)
 	s.mux.HandleFunc("GET /api/oidc/callback", s.handleOIDCCallback)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
@@ -221,6 +222,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sess, loggedIn := s.session(r)
 		switch {
 		case loggedIn && sess.role == userstore.RoleAdmin:
+			if s.users != nil && s.users.NeedsOnboarding(sess.user) &&
+				r.URL.Path != "/api/auth" && r.URL.Path != "/api/onboarding" && r.URL.Path != "/api/logout" {
+				httpError(w, http.StatusForbidden, "complete first-login setup before using Rookery")
+				return
+			}
 			// full access
 		case loggedIn: // viewer account
 			if !readOnlyAllowed(r) {

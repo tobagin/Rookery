@@ -2,7 +2,13 @@
 // static binary.
 package web
 
-import "embed"
+import (
+	"embed"
+	"io/fs"
+)
 
-//go:embed index.html app.js style.css
-var Files embed.FS
+//go:embed dist
+var dist embed.FS
+
+// Files exposes the built SPA at the filesystem root for http.FileServerFS.
+var Files, _ = fs.Sub(dist, "dist")

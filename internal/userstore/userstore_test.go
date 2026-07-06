@@ -20,6 +20,15 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err := s.Create("admin", "hunter2hunter2", RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.CreateWithProfile(User{
+		Name:               "bootstrap",
+		Email:              "admin@example.com",
+		Role:               RoleAdmin,
+		MustChangePassword: true,
+		MustSetEmail:       true,
+	}, "temporarypass"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Create("admin", "otherpass1", RoleAdmin); err == nil {
 		t.Error("duplicate username accepted")
 	}
@@ -44,6 +53,21 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if role, ok := s2.Verify("admin", "hunter2hunter2"); !ok || role != RoleAdmin {
 		t.Errorf("Verify(admin) = %q, %v", role, ok)
+	}
+	if u, ok := s2.VerifyUser("admin@example.com", "temporarypass"); !ok || u.Name != "bootstrap" || !u.MustChangePassword || !u.MustSetEmail {
+		t.Errorf("VerifyUser(email) = %#v, %v", u, ok)
+	}
+	if !s2.NeedsOnboarding("bootstrap") {
+		t.Error("bootstrap user should need onboarding")
+	}
+	if err := s2.CompleteOnboarding("bootstrap", "owner@example.test", "temporarypass", "newtemporarypass"); err != nil {
+		t.Fatal(err)
+	}
+	if s2.NeedsOnboarding("bootstrap") {
+		t.Error("bootstrap user still needs onboarding after completion")
+	}
+	if u, ok := s2.VerifyUser("owner@example.test", "newtemporarypass"); !ok || u.Email != "owner@example.test" {
+		t.Errorf("updated email login failed: %#v %v", u, ok)
 	}
 	if _, ok := s2.Verify("admin", "wrongpass"); ok {
 		t.Error("wrong password verified")
@@ -72,7 +96,10 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Error("new password rejected")
 	}
 
-	// The last admin is not deletable.
+	// One of multiple admins is deletable; the last admin is not.
+	if err := s2.Delete("bootstrap"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s2.Delete("admin"); err == nil {
 		t.Error("deleted the last admin")
 	}
