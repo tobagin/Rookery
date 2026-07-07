@@ -306,6 +306,7 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
 .history-row:hover, .gpu-row:hover { background: var(--row-hover); }
 .history-row:last-child, .gpu-row:last-child { border-bottom: 0; }
 .settings-user-row .input { min-width: 160px; }
+.settings-user-row code { min-width: 120px; }
 .settings-list { display: flex; flex-direction: column; gap: 0; }
 .setting-row {
   display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 420px); align-items: center; gap: 12px;

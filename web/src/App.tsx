@@ -1565,7 +1565,7 @@ function SecretsView() {
   );
 }
 
-type LocalUser = { name: string; email?: string; role: string };
+type LocalUser = { name: string; email?: string; role: string; mustChangePassword?: boolean; mustSetEmail?: boolean };
 type SettingItem = { key: string; label: string; value: unknown; source: string; locked: boolean; editable: boolean; restartRequired?: boolean };
 type SettingGroup = { name: string; items: SettingItem[] };
 
@@ -1619,6 +1619,8 @@ function UsersSettings() {
   const { toast } = useApiContext();
   const [users, setUsers] = useState<LocalUser[]>([]);
   const [me, setMe] = useState("");
+  const [q, setQ] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1670,18 +1672,38 @@ function UsersSettings() {
       toast((e as Error).message, true);
     }
   }
+  const admins = users.filter((u) => u.role === "admin").length;
+  const viewers = users.filter((u) => u.role === "viewer").length;
+  const pending = users.filter((u) => u.mustChangePassword || u.mustSetEmail).length;
+  const filtered = users.filter((u) => {
+    const needle = q.trim().toLowerCase();
+    if (roleFilter !== "all" && u.role !== roleFilter) return false;
+    return !needle || `${u.name} ${u.email || ""} ${u.role}`.toLowerCase().includes(needle);
+  });
   return (
     <>
+      <div className="tiles">
+        <MetricTile label="local users" value={users.length} tone={users.length ? "ok" : "dim"} />
+        <MetricTile label="admins" value={admins} tone={admins ? "ok" : "warn"} />
+        <MetricTile label="viewers" value={viewers} tone="dim" />
+        <MetricTile label="setup pending" value={pending} tone={pending ? "warn" : "dim"} />
+      </div>
       <Panel title="Accounts" icon={Users}>
-        {users.map((u) => <div className="history-row settings-user-row" key={u.name}>
+        <div className="filterbar">
+          <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter users..." /></label>
+          <select className="input" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}><option value="all">all roles</option><option value="admin">admin</option><option value="viewer">viewer</option></select>
+        </div>
+        {filtered.length ? filtered.map((u) => <div className="history-row settings-user-row" key={u.name}>
           <code>{u.name}{u.name === me ? " (you)" : ""}</code>
           <input className="input" type="email" placeholder="email" value={u.email || ""} onChange={(e) => setUsers((rows) => rows.map((row) => row.name === u.name ? { ...row, email: e.target.value } : row))} onBlur={() => updateUser(u, { email: u.email || "" })} />
           <select className="input" value={u.role} onChange={(e) => updateUser(u, { role: e.target.value })}><option value="viewer">viewer</option><option value="admin">admin</option></select>
           <span className={`badge ${u.role === "admin" ? "badge-user" : ""}`}>{u.role}</span>
+          {u.mustSetEmail && <span className="badge badge-warn">email required</span>}
+          {u.mustChangePassword && <span className="badge badge-warn">password reset</span>}
           <span className="grow" />
           <button className="btn btn-sm" onClick={() => resetPassword(u.name)}><KeyRound size={14} /> reset</button>
           <button className="btn btn-sm btn-danger" onClick={() => del(u.name)}><Trash2 size={14} /> delete</button>
-        </div>)}
+        </div>) : <EmptyState title="No matching users" text="Adjust the account filters or add a local user." />}
       </Panel>
       <Panel title="Add user" icon={Plus}>
         <div className="filterbar">

@@ -18,6 +18,8 @@ GitHub release notes may include the full commit list.
   commercial boundary.
 - Added remaining-node and over-limit counts to the license API and Fleet /
   About displays for clearer Enterprise Free allowance visibility.
+- Improved Settings → Users with account summary tiles, role/search filters,
+  and setup-required badges for local accounts.
 - Added an initial read-only edition/license status API and Settings/About
   display for the planned 3-node Enterprise Free model. Enforcement remains
   disabled in alpha.
