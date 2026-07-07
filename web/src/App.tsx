@@ -19,6 +19,8 @@ import {
   LogOut,
   Logs,
   Menu,
+  Monitor,
+  Moon,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -31,6 +33,7 @@ import {
   Settings,
   Shield,
   SquarePen,
+  Sun,
   Trash2,
   UserRound,
   Users,
@@ -61,6 +64,7 @@ import {
 } from "./lib";
 
 type Toast = { id: number; message: string; error?: boolean };
+type ThemeMode = "dark" | "light" | "auto";
 
 type ApiContext = {
   auth: AuthState;
@@ -118,6 +122,10 @@ export function App() {
   const [loaded, setLoaded] = useState(false);
   const [host, setHost] = useState<HostInfo | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem("rookery-theme");
+    return saved === "dark" || saved === "light" || saved === "auto" ? saved : "auto";
+  });
 
   const toast = useCallback((message: string, error = false) => {
     const id = Date.now() + Math.random();
@@ -167,6 +175,11 @@ export function App() {
     return () => window.clearInterval(id);
   }, [auth.authenticated, auth.required, loadHost, loaded]);
 
+  useEffect(() => {
+    localStorage.setItem("rookery-theme", theme);
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
   if (!loaded) return <Splash />;
   if (auth.setupNeeded && !sessionStorage.getItem("rookery-setup-skip")) {
     return (
@@ -196,7 +209,7 @@ export function App() {
   return (
     <ApiContext.Provider value={{ auth, setAuth, toast }}>
       <AppErrorBoundary>
-        <Shell host={host} reloadAuth={loadAuth}>
+        <Shell host={host} reloadAuth={loadAuth} theme={theme} setTheme={setTheme}>
           <Routes>
             <Route path="/" element={<Dashboard host={host} />} />
             <Route path="/units" element={<UnitsPage />} />
@@ -234,7 +247,7 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
   return children;
 }
 
-function Shell({ host, reloadAuth, children }: { host: HostInfo | null; reloadAuth: () => Promise<void>; children: React.ReactNode }) {
+function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo | null; reloadAuth: () => Promise<void>; theme: ThemeMode; setTheme: (theme: ThemeMode) => void; children: React.ReactNode }) {
   const { auth, toast } = useApiContext();
   const api = useApi();
   const location = useLocation();
@@ -275,7 +288,12 @@ function Shell({ host, reloadAuth, children }: { host: HostInfo | null; reloadAu
             {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
           </button>
         </div>
-        <nav className="side-nav">{nav.map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} />)}</nav>
+        <nav className="side-nav">{groupedNavItems(nav).map((group) => (
+          <div className="nav-group" key={group.name}>
+            <div className="nav-group-label">{group.name}</div>
+            {group.items.map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} />)}
+          </div>
+        ))}</nav>
         <div className="sidebar-foot">
           {auth.username && <span className="user-chip" title={auth.username}><UserRound size={14} /><span>{auth.username}{auth.readOnly ? " (view)" : ""}</span></span>}
           {auth.required && auth.authenticated && <button className="icon-line" onClick={logout} title="Log out"><LogOut size={15} /><span>Log out</span></button>}
@@ -291,6 +309,7 @@ function Shell({ host, reloadAuth, children }: { host: HostInfo | null; reloadAu
             {auth.readOnly && <span className="chip chip-warn"><Eye size={13} /> read-only</span>}
           </div>
           <div className="top-actions">
+            <ThemeSwitch theme={theme} setTheme={setTheme} />
             {!auth.readOnly && <Link className="btn btn-accent" to="/new"><Plus size={16} /> New unit</Link>}
             {!auth.readOnly && auth.required && auth.authenticated && <button className="btn btn-ghost" onClick={copyShare}><Github size={16} /> Share</button>}
             <button className="btn icon-only mobile-more" onClick={() => setMoreOpen((v) => !v)} aria-label="More"><Menu size={18} /></button>
@@ -311,24 +330,44 @@ function Shell({ host, reloadAuth, children }: { host: HostInfo | null; reloadAu
   );
 }
 
+function ThemeSwitch({ theme, setTheme }: { theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
+  const options: Array<[ThemeMode, React.ReactNode, string]> = [
+    ["auto", <Monitor size={15} />, "Use system theme"],
+    ["light", <Sun size={15} />, "Light theme"],
+    ["dark", <Moon size={15} />, "Dark theme"],
+  ];
+  return (
+    <div className="segmented theme-switch" aria-label="Theme">
+      {options.map(([mode, icon, label]) => (
+        <button key={mode} className={theme === mode ? "active" : ""} title={label} aria-label={label} onClick={() => setTheme(mode)}>{icon}</button>
+      ))}
+    </div>
+  );
+}
+
 function locationOrigin() {
   return window.location.origin;
 }
 
 function navItems(readOnly: boolean) {
   const base = [
-    { to: "/", label: "Dashboard", icon: Home },
-    { to: "/units", label: "Units", icon: Boxes },
-    { to: "/failed", label: "Failed", icon: AlertTriangle },
-    { to: "/fleet", label: "Fleet", icon: Network },
-    { to: "/policies", label: "Policy", icon: Shield },
-    { to: "/updates", label: "Updates", icon: Download, admin: true },
-    { to: "/gpus", label: "GPUs", icon: Cpu },
-    { to: "/import", label: "Import", icon: Import, admin: true },
-    { to: "/secrets", label: "Secrets", icon: KeyRound, admin: true },
-    { to: "/settings", label: "Settings", icon: Settings, admin: true },
+    { to: "/", label: "Dashboard", icon: Home, group: "Observe" },
+    { to: "/units", label: "Units", icon: Boxes, group: "Operate" },
+    { to: "/failed", label: "Failed", icon: AlertTriangle, group: "Operate" },
+    { to: "/updates", label: "Updates", icon: Download, group: "Operate", admin: true },
+    { to: "/gpus", label: "GPUs", icon: Cpu, group: "Operate" },
+    { to: "/fleet", label: "Fleet", icon: Network, group: "Govern" },
+    { to: "/policies", label: "Policy", icon: Shield, group: "Govern" },
+    { to: "/import", label: "Import", icon: Import, group: "Admin", admin: true },
+    { to: "/secrets", label: "Secrets", icon: KeyRound, group: "Admin", admin: true },
+    { to: "/settings", label: "Settings", icon: Settings, group: "Admin", admin: true },
   ];
   return base.filter((item) => !readOnly || !item.admin);
+}
+
+function groupedNavItems(items: Array<{ to: string; label: string; icon: React.ElementType; group?: string }>) {
+  const order = ["Observe", "Operate", "Govern", "Admin"];
+  return order.map((name) => ({ name, items: items.filter((item) => (item.group || "Operate") === name) })).filter((group) => group.items.length);
 }
 
 function NavLinkItem({ item, active, compact, onClick }: { item: { to: string; label: string; icon: React.ElementType }; active: boolean; compact?: boolean; onClick?: () => void }) {
@@ -347,7 +386,7 @@ function isActive(pathname: string, to: string) {
 }
 
 function BrandMark() {
-  return <span className="brand-mark" aria-hidden="true">🦭</span>;
+  return <span className="brand-mark" aria-hidden="true">R</span>;
 }
 
 function LoginView({ reloadAuth }: { reloadAuth: () => Promise<void> }) {

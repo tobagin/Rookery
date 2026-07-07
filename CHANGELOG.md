@@ -5,6 +5,8 @@ GitHub release notes may include the full commit list.
 
 ## Unreleased
 
+- Added dark/light/auto theme switching, grouped sidebar navigation, and a
+  more professional operations-console visual polish pass.
 - Added an initial read-only edition/license status API and Settings/About
   display for the planned 3-node Enterprise Free model. Enforcement remains
   disabled in alpha.
