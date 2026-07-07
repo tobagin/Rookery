@@ -22,6 +22,8 @@ GitHub release notes may include the full commit list.
   and setup-required badges for local accounts.
 - Improved Settings → Audit with event summary tiles, actor/action/search
   filters, refresh control, and wrapped JSON details.
+- Improved Updates with summary tiles and scope/status/search filters for
+  checked image drift rows.
 - Added an initial read-only edition/license status API and Settings/About
   display for the planned 3-node Enterprise Free model. Enforcement remains
   disabled in alpha.

@@ -1428,7 +1428,21 @@ function UpdatesView() {
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const [summary, setSummary] = useState("");
   const [stale, setStale] = useState<{ count: number; bytes: number } | null>(null);
+  const [q, setQ] = useState("");
+  const [scope, setScope] = useState("all");
+  const [status, setStatus] = useState("all");
   const available = updates.filter((u) => u.updateAvailable);
+  const noted = updates.filter((u) => u.note && !u.updateAvailable);
+  const current = updates.filter((u) => !u.note && !u.updateAvailable);
+  const scopes = ["all", ...Array.from(new Set(updates.map((row) => row.scope))).sort()];
+  const filtered = updates.filter((row) => {
+    const needle = q.trim().toLowerCase();
+    if (scope !== "all" && row.scope !== scope) return false;
+    if (status === "available" && !row.updateAvailable) return false;
+    if (status === "current" && (row.updateAvailable || row.note)) return false;
+    if (status === "skipped" && (!row.note || row.updateAvailable)) return false;
+    return !needle || `${row.name} ${row.image || ""} ${row.note || ""} ${row.scope}`.toLowerCase().includes(needle);
+  });
 
   async function check() {
     try {
@@ -1459,12 +1473,23 @@ function UpdatesView() {
 
   return (
     <Page title="Updates" kicker="Registry drift and stale image cleanup">
+      <div className="tiles">
+        <MetricTile label="updates available" value={available.length} tone={available.length ? "warn" : "dim"} />
+        <MetricTile label="current" value={current.length} tone={current.length ? "ok" : "dim"} />
+        <MetricTile label="skipped / errors" value={noted.length} tone={noted.length ? "warn" : "dim"} />
+        <MetricTile label="stale images" value={stale?.count || 0} tone={stale?.count ? "warn" : "dim"} />
+      </div>
       <div className="action-row"><button className="btn btn-accent" onClick={check}><RefreshCw size={16} /> Check image updates</button>{summary && <span className="muted">{summary}</span>}{stale?.count ? <button className="btn" onClick={prune}><Trash2 size={16} /> Prune {stale.count} stale ({fmtBytes(stale.bytes)})</button> : null}</div>
       <Panel title="Available updates" icon={Download}>
         {available.length ? available.map((row) => <UpdateRow key={`${row.scope}/${row.name}`} row={row} after={check} />) : <p className="muted">No image updates currently flagged.</p>}
       </Panel>
       <Panel title="Checked units" icon={ListFilter}>
-        {updates.length ? updates.map((row) => <div className="history-row" key={`${row.scope}/${row.name}`}><span className="grow">{row.name}</span><span className="badge">{row.scope}</span><span className={row.updateAvailable ? "warn-text" : "muted"}>{row.updateAvailable ? "update available" : row.note || "current"}</span></div>) : <p className="muted">Run a check to populate results.</p>}
+        <div className="filterbar">
+          <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter checked units..." /></label>
+          <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
+          <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">all statuses</option><option value="available">update available</option><option value="current">current</option><option value="skipped">skipped / errors</option></select>
+        </div>
+        {updates.length ? filtered.length ? filtered.map((row) => <div className="history-row" key={`${row.scope}/${row.name}`}><span className="grow">{row.name}<span className="muted"> {row.image}</span></span><span className="badge">{row.scope}</span><span className={row.updateAvailable ? "warn-text" : "muted"}>{row.updateAvailable ? "update available" : row.note || "current"}</span></div>) : <EmptyState title="No matching update rows" text="Adjust the update filters or run a fresh check." /> : <p className="muted">Run a check to populate results.</p>}
       </Panel>
     </Page>
   );
