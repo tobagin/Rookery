@@ -1,7 +1,7 @@
 # PRD — Rookery
 
 **Rookery — a Quadlet-native web UI for Podman hosts.** (A rookery is where a pod of seals gathers.)
-Version 0.3 · 2026-07-04 · Author: tobagin · License: Apache-2.0
+Version 0.4 · 2026-07-06 · Author: tobagin · License: Apache-2.0
 
 ---
 
@@ -33,7 +33,9 @@ Don't clone Portainer against the Docker API — that lane is commoditized.
 Build the tool that treats **unit files on disk as the single source of
 truth** (the same on-disk, Git-friendly model that made Arcane compelling for
 compose), and make the UI a thin, honest layer over systemd + Podman.
-Delete the daemon, keep the workflow.
+Delete the daemon, keep the workflow. Rookery may keep local control-plane
+metadata for accounts and UI-managed settings, but it must never make that
+metadata authoritative for workloads.
 
 ## 3. Target users
 
@@ -51,10 +53,11 @@ serves them well).
 **Goals**
 1. Full Quadlet lifecycle in a browser: list, create, edit, validate, start,
    stop, logs, health — including `.pod`, `.network`, `.volume` units.
-2. Files on disk remain authoritative; the tool never hides state in its own
-   database. A user can always fall back to SSH + `systemctl` with zero loss.
+2. Files on disk remain authoritative for workloads; the tool never hides
+   unit definitions or lifecycle state in its own database. A user can always
+   fall back to SSH + `systemctl` with zero loss of workload control.
 3. Rootless-first: manage units for multiple Linux users, not just root.
-4. Single static Go binary (or one container), arm64 + x86_64, no external
+4. Single Go binary (or one container), arm64 + x86_64, no external service
    dependencies (no Postgres/Redis/NATS stack).
 5. GPU visibility: show device attachments, VRAM/utilization per container.
 
@@ -97,12 +100,13 @@ serves them well).
 
 ## 6. Architecture sketch
 
-- **Backend**: Go, zero third-party dependencies. Talks to (a) systemd via
+- **Backend**: Go. Talks to (a) systemd via
   `systemctl` (per-user sessions via `--user --machine user@.host`),
   (b) Podman via its native REST socket (not the Docker shim), (c) the
-  filesystem for unit files, (d) logs via `journalctl`. No database, no
-  cache — the server is stateless and re-reads unit files from disk per
-  request.
+  filesystem for unit files, (d) logs via `journalctl`, and (e) a local
+  SQLite database for accounts, settings, and other durable Rookery-owned
+  metadata. The database is not part of the workload source of truth; the
+  server re-reads unit files from disk per request.
 - **Frontend**: single-page app embedded in the same binary; Server-Sent
   Events for log streams, polled JSON for host/GPU stats.
 - **Deploy**: one binary + a systemd unit (dogfood: ship it as a Quadlet).
@@ -139,7 +143,7 @@ desktop app.
 | Risk | Mitigation |
 |---|---|
 | Red Hat ships Quadlet editing in Cockpit | Ship first; differentiate on GPU, Git, multi-host, UX. Cockpit's cadence is slow and framework-bound. |
-| Sustainability (this is reputation-ware, not revenue-ware) | Scope ruthlessly: no daemon, no DB, no agents = low maintenance surface. GitHub Sponsors; never paywall features (that's the wound Portainer died of). |
+| Sustainability (this is reputation-ware, not revenue-ware) | Scope ruthlessly: no daemon, no agents, no external services, and no hidden workload state. GitHub Sponsors; never paywall features (that's the wound Portainer died of). |
 | Quadlet spec churn across Podman versions | Validate via the host's own `podman-system-generator`, not a vendored parser. |
 | Single-maintainer burnout (see quadletman) | MVP must be useful standalone even if development stops — files-on-disk model guarantees no lock-in. |
 
@@ -169,7 +173,11 @@ desktop app.
    editor with generator validation, single host, read-only GPU info.
 2. **Weeks 5–8**: MVP feature-complete; dogfood on the N5 Air (migrate the 27
    Pi containers to Quadlets using only the tool).
-3. **Public alpha**: post to r/selfhosted + Podman Discourse; iterate on the
+3. **Alpha hardening**: keep docs aligned with the SQLite-backed admin
+   metadata, verify `users.json` migration, document backup/restore for
+   `ROOKERY_DATA_DIR` plus Quadlet dirs, prove install/upgrade/container
+   deployments, and publish known limitations.
+4. **Public alpha**: post to r/selfhosted + Podman Discourse; iterate on the
    importer (the migration story is the growth engine).
-4. **v1**: multi-host + Git + GPU panel; submit to Fedora COPR and Flathub
+5. **v1**: multi-host + Git + GPU panel; submit to Fedora COPR and Flathub
    (Cockpit-style bridge later if demanded).

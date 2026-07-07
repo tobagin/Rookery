@@ -55,7 +55,7 @@ func main() {
 	oidcAdminGroups := flag.String("oidc-admin-groups", envOr("ROOKERY_OIDC_ADMIN_GROUPS", ""), "comma-separated OIDC groups that get admin role")
 	oidcDefaultRole := flag.String("oidc-default-role", envOr("ROOKERY_OIDC_DEFAULT_ROLE", "viewer"), "role for other OIDC users: viewer or admin")
 	dataDir := flag.String("data-dir", envOr("ROOKERY_DATA_DIR", ""),
-		"directory for rookery's own files (users.json); default /etc/rookery rootful, ~/.config/rookery rootless")
+		"directory for rookery's own files (rookery.db); default /etc/rookery rootful, ~/.config/rookery rootless")
 	sessionTTL := flag.Duration("session-ttl", envDurationOr("ROOKERY_SESSION_TTL", 24*time.Hour),
 		"idle timeout for login sessions (sliding)")
 	showVersion := flag.Bool("version", false, "print version and exit")
