@@ -16,6 +16,8 @@ GitHub release notes may include the full commit list.
 - Clarified the Enterprise Free model in the license API, About panel, and
   docs: local users and SSO identities are unlimited; node scale is the
   commercial boundary.
+- Added remaining-node and over-limit counts to the license API and Fleet /
+  About displays for clearer Enterprise Free allowance visibility.
 - Added an initial read-only edition/license status API and Settings/About
   display for the planned 3-node Enterprise Free model. Enforcement remains
   disabled in alpha.

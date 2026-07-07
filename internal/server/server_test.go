@@ -192,6 +192,12 @@ func TestLicenseStatusCountsUniqueManagedNodes(t *testing.T) {
 	if got := int(lic["managedNodes"].(float64)); got != 2 {
 		t.Fatalf("managedNodes = %d, want 2", got)
 	}
+	if got := int(lic["nodesRemaining"].(float64)); got != 1 {
+		t.Fatalf("nodesRemaining = %d, want 1", got)
+	}
+	if got := int(lic["nodesOverLimit"].(float64)); got != 0 {
+		t.Fatalf("nodesOverLimit = %d, want 0", got)
+	}
 	if lic["enterpriseAvailable"] != true {
 		t.Fatalf("enterpriseAvailable = %v, want true", lic["enterpriseAvailable"])
 	}
@@ -219,6 +225,12 @@ func TestLicenseStatusFlagsAboveFreeAllowanceWithoutEnforcement(t *testing.T) {
 	lic := body["license"].(map[string]any)
 	if got := int(lic["managedNodes"].(float64)); got != 4 {
 		t.Fatalf("managedNodes = %d, want 4", got)
+	}
+	if got := int(lic["nodesRemaining"].(float64)); got != 0 {
+		t.Fatalf("nodesRemaining = %d, want 0", got)
+	}
+	if got := int(lic["nodesOverLimit"].(float64)); got != 1 {
+		t.Fatalf("nodesOverLimit = %d, want 1", got)
 	}
 	if lic["enterpriseAvailable"] != false {
 		t.Fatalf("enterpriseAvailable = %v, want false", lic["enterpriseAvailable"])

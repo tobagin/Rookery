@@ -54,6 +54,8 @@ export interface LicenseStatus {
   plan: string;
   managedNodes: number;
   nodeLimit: number;
+  nodesRemaining: number;
+  nodesOverLimit: number;
   localUserLimit: number;
   ssoUserLimit: number;
   nodes: string[];

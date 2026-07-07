@@ -1077,6 +1077,7 @@ function FleetView() {
     <Page title="Fleet" kicker="Managed Podman nodes">
       <div className="tiles">
         <MetricTile label="managed nodes" value={license ? `${license.managedNodes}/${license.nodeLimit}` : nodes.length} tone={license && !license.enterpriseAvailable ? "warn" : "ok"} />
+        {license && <MetricTile label={license.enterpriseAvailable ? "nodes remaining" : "nodes over"} value={license.enterpriseAvailable ? license.nodesRemaining : license.nodesOverLimit} tone={license.enterpriseAvailable ? "ok" : "warn"} />}
         <MetricTile label="units" value={totalUnits} tone={totalUnits ? "ok" : "dim"} />
         <MetricTile label="failed" value={failed} tone={failed ? "bad" : "dim"} />
         <MetricTile label="edition" value={license?.edition || "unknown"} tone="dim" />
@@ -1734,6 +1735,8 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
       ["validator", host?.generatorAvailable ? "available" : "unavailable"],
       ["edition", license?.edition || "unknown"],
       ["managed nodes", license ? `${license.managedNodes}/${license.nodeLimit}` : "unknown"],
+      ["nodes remaining", license ? String(license.nodesRemaining) : "unknown"],
+      ["nodes over limit", license ? String(license.nodesOverLimit) : "unknown"],
       ["local users", limitText(license?.localUserLimit)],
       ["SSO users", limitText(license?.ssoUserLimit)],
       ["enforcement", license?.enforcement || "unknown"],

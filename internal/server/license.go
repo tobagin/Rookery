@@ -9,6 +9,8 @@ type LicenseStatus struct {
 	Plan                string   `json:"plan"`
 	ManagedNodes        int      `json:"managedNodes"`
 	NodeLimit           int      `json:"nodeLimit"`
+	NodesRemaining      int      `json:"nodesRemaining"`
+	NodesOverLimit      int      `json:"nodesOverLimit"`
 	LocalUserLimit      int      `json:"localUserLimit"`
 	SSOUserLimit        int      `json:"ssoUserLimit"`
 	Nodes               []string `json:"nodes"`
@@ -31,11 +33,19 @@ func (s *Server) licenseStatus() LicenseStatus {
 		seen[node] = true
 		nodes = append(nodes, node)
 	}
+	remaining := enterpriseFreeNodeLimit - len(nodes)
+	over := 0
+	if remaining < 0 {
+		over = -remaining
+		remaining = 0
+	}
 	status := LicenseStatus{
 		Edition:             "Enterprise Free",
 		Plan:                "enterprise_free",
 		ManagedNodes:        len(nodes),
 		NodeLimit:           enterpriseFreeNodeLimit,
+		NodesRemaining:      remaining,
+		NodesOverLimit:      over,
 		LocalUserLimit:      0,
 		SSOUserLimit:        0,
 		Nodes:               nodes,
