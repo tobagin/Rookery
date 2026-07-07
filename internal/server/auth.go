@@ -186,7 +186,9 @@ func readOnlyAllowed(r *http.Request) bool {
 	// No secrets metadata and no account list for read-only principals.
 	return !strings.HasPrefix(r.URL.Path, "/api/secrets") &&
 		!strings.HasPrefix(r.URL.Path, "/api/users") &&
-		!strings.HasPrefix(r.URL.Path, "/api/settings")
+		!strings.HasPrefix(r.URL.Path, "/api/settings") &&
+		!strings.HasPrefix(r.URL.Path, "/api/audit") &&
+		!strings.HasPrefix(r.URL.Path, "/api/backup")
 }
 
 /* ---------- read-only share links ----------
@@ -244,10 +246,12 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "no credentials are set — this instance is already open")
 		return
 	}
-	token := s.mintShare(time.Now().Add(shareTTL))
+	expiry := time.Now().Add(shareTTL)
+	token := s.mintShare(expiry)
+	s.audit(r, "share.create", "dashboard", map[string]any{"expires": expiry.Unix()})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":   token,
-		"expires": time.Now().Add(shareTTL).Unix(),
+		"expires": expiry.Unix(),
 	})
 }
 
@@ -308,6 +312,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, r, s.sess.create(req.Username, userstore.RoleAdmin))
+	s.auditAs(req.Username, "setup.complete", req.Username, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": req.Username, "role": userstore.RoleAdmin})
 }
 
@@ -351,6 +356,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, r, s.sess.create(user, role))
 	onboarding := s.users != nil && s.users.NeedsOnboarding(user)
+	s.auditAs(user, "auth.login", user, map[string]any{"role": role, "onboarding": onboarding})
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": user, "role": role, "onboarding": onboarding})
 }
 
@@ -381,6 +387,7 @@ func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "onboarding.complete", sess.user, map[string]any{"emailSet": req.Email != ""})
 	writeJSON(w, http.StatusOK, map[string]any{"updated": sess.user})
 }
 
@@ -428,6 +435,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	user, role := s.resolveOIDCIdentity(claims)
 	s.setSessionCookie(w, r, s.sess.create(user, role))
+	s.auditAs(user, "auth.oidc.login", user, map[string]any{"role": role, "provider": s.oidc.ProviderName()})
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -474,6 +482,9 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token 
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if sess, ok := s.session(r); ok {
+		s.auditAs(sess.user, "auth.logout", sess.user, nil)
+	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		s.sess.revoke(c.Value)
 	}

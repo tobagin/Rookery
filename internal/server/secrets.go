@@ -104,6 +104,7 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	s.audit(r, "secret.create", req.Name, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"created": req.Name})
 }
 
@@ -126,5 +127,6 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	s.audit(r, "secret.delete", name, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": name})
 }

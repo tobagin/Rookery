@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentSchema = 1
+const CurrentSchema = 4
 
 // Open opens rookery.db and applies all schema migrations.
 func Open(path string) (*sql.DB, error) {
@@ -95,6 +95,37 @@ func applyMigration(db *sql.DB, version int) error {
 	source TEXT NOT NULL,
 	locked INTEGER NOT NULL DEFAULT 1,
 	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+			return err
+		}
+	case 2:
+		if _, err := tx.Exec(`CREATE TABLE node_metadata (
+	node_id TEXT PRIMARY KEY,
+	labels_json TEXT NOT NULL DEFAULT '[]',
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+			return err
+		}
+	case 3:
+		if _, err := tx.Exec(`CREATE TABLE audit_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	actor TEXT NOT NULL DEFAULT '',
+	action TEXT NOT NULL,
+	target TEXT NOT NULL DEFAULT '',
+	detail_json TEXT NOT NULL DEFAULT '{}',
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE INDEX audit_events_created_at_idx ON audit_events(created_at DESC, id DESC)`); err != nil {
+			return err
+		}
+	case 4:
+		if _, err := tx.Exec(`CREATE TABLE policy_waivers (
+	key TEXT PRIMARY KEY,
+	reason TEXT NOT NULL DEFAULT '',
+	created_by TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`); err != nil {
 			return err
 		}

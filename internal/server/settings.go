@@ -56,6 +56,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	keys := make([]string, 0, len(req.Settings))
+	for key := range req.Settings {
+		keys = append(keys, key)
+	}
+	s.audit(r, "settings.update", "settings", map[string]any{"keys": keys})
 	writeJSON(w, http.StatusOK, map[string]any{"updated": true, "restartRequired": true, "groups": s.effectiveSettings()})
 }
 

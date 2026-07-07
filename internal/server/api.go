@@ -220,6 +220,7 @@ func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": validation})
 		return
 	}
+	s.audit(r, "unit.save", area.Label+"/"+name, map[string]any{"scope": area.Label, "unit": name, "created": !exists, "restart": req.Restart})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"unit":       s.unitJSONFor(r, area, name, path),
 		"validation": validation,
@@ -314,6 +315,7 @@ func (s *Server) handleDeleteUnit(w http.ResponseWriter, r *http.Request) {
 			warnings = append(warnings, "git: "+err.Error())
 		}
 	}
+	s.audit(r, "unit.delete", area.Label+"/"+name, map[string]any{"scope": area.Label, "unit": name})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": name, "warnings": warnings})
 }
 
@@ -442,6 +444,7 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := joinUnitPath(area, area.Dirs[0], name)
+	s.audit(r, "unit."+req.Action, area.Label+"/"+name, map[string]any{"scope": area.Label, "unit": name, "service": service})
 	writeJSON(w, http.StatusOK, map[string]any{"unit": s.unitJSONFor(r, area, name, path)})
 }
 

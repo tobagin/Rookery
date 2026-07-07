@@ -270,6 +270,8 @@ Design rules (from the [PRD](docs/PRD.md)):
 
 | Method & path | Purpose |
 |---|---|
+| `GET /api/audit` | recent admin mutation audit events |
+| `GET /api/backup` | tar.gz export of Rookery metadata and managed Quadlet files |
 | `GET /api/units` | all units with live state |
 | `GET /api/units/{scope}/{name}` | unit + file content |
 | `PUT /api/units/{scope}/{name}` | validate → write → daemon-reload (`{"content", "restart"}`) |
@@ -286,6 +288,12 @@ Design rules (from the [PRD](docs/PRD.md)):
 | `POST /api/units/{scope}/{name}/update` | pull new image + restart |
 | `GET /api/gpus` | GPU inventory, local + every remote host |
 | `GET /api/host` | metrics, Podman info, scopes |
+| `GET /api/license` | edition, planned 3-node Enterprise Free allowance, managed-node count |
+| `GET /api/nodes` | managed-node inventory grouped from local and remote scopes |
+| `GET /api/groups` | label-derived node groups for fleet organization |
+| `PATCH /api/nodes/{id}/labels` | save Rookery-owned node labels for fleet organization |
+| `GET /api/policies` | read-only fleet policy findings from Quadlet files |
+| `POST /api/policies/waivers`, `DELETE /api/policies/waivers/{key}` | waive or unwaive policy findings with Rookery metadata |
 | `GET/POST /api/secrets`, `DELETE /api/secrets/{name}` | podman secrets (write-only values) |
 | `GET /api/images/stale` / `POST /api/images/prune` | dangling-image count/size, prune |
 | `POST /api/share` | mint a 7-day read-only share token |

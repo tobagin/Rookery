@@ -42,10 +42,15 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, use
 import { defaultAuth, IMPORT_MODES, TEMPLATES } from "./constants";
 import {
   AuthState,
+  AuditEvent,
   fmtBytes,
   GPUDevice,
   HostInfo,
   insertIntoSection,
+  LicenseStatus,
+  ManagedNode,
+  NodeGroup,
+  PolicyFinding,
   lineDiff,
   stateClass,
   stateLabel,
@@ -196,6 +201,8 @@ export function App() {
             <Route path="/" element={<Dashboard host={host} />} />
             <Route path="/units" element={<UnitsPage />} />
             <Route path="/failed" element={<UnitsPage failedOnly />} />
+            <Route path="/fleet" element={<FleetView />} />
+            <Route path="/policies" element={<PoliciesView />} />
             <Route path="/unit/:scope/:name" element={<UnitDetail />} />
             <Route path="/new" element={<AdminOnly><NewUnit /></AdminOnly>} />
             <Route path="/import" element={<AdminOnly><ImportView /></AdminOnly>} />
@@ -313,6 +320,8 @@ function navItems(readOnly: boolean) {
     { to: "/", label: "Dashboard", icon: Home },
     { to: "/units", label: "Units", icon: Boxes },
     { to: "/failed", label: "Failed", icon: AlertTriangle },
+    { to: "/fleet", label: "Fleet", icon: Network },
+    { to: "/policies", label: "Policy", icon: Shield },
     { to: "/updates", label: "Updates", icon: Download, admin: true },
     { to: "/gpus", label: "GPUs", icon: Cpu },
     { to: "/import", label: "Import", icon: Import, admin: true },
@@ -977,6 +986,163 @@ function actionIcon(action: string) {
   return icons[action] || <Zap size={16} />;
 }
 
+function FleetView() {
+  const api = useApi();
+  const { auth, toast } = useApiContext();
+  const [nodes, setNodes] = useState<ManagedNode[]>([]);
+  const [groups, setGroups] = useState<NodeGroup[]>([]);
+  const [license, setLicense] = useState<LicenseStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    try {
+      const { body } = await api<{ nodes?: ManagedNode[]; license?: LicenseStatus }>("/api/nodes");
+      setNodes(body.nodes || []);
+      setLicense(body.license || null);
+      const groupResp = await api<{ groups?: NodeGroup[] }>("/api/groups");
+      setGroups(groupResp.body.groups || []);
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, toast]);
+  useEffect(() => { load(); }, [load]);
+  const totalUnits = nodes.reduce((sum, n) => sum + n.units, 0);
+  const failed = nodes.reduce((sum, n) => sum + n.failed, 0);
+  return (
+    <Page title="Fleet" kicker="Managed Podman nodes">
+      <div className="tiles">
+        <MetricTile label="managed nodes" value={license ? `${license.managedNodes}/${license.nodeLimit}` : nodes.length} tone={license && !license.enterpriseAvailable ? "warn" : "ok"} />
+        <MetricTile label="units" value={totalUnits} tone={totalUnits ? "ok" : "dim"} />
+        <MetricTile label="failed" value={failed} tone={failed ? "bad" : "dim"} />
+        <MetricTile label="edition" value={license?.edition || "unknown"} tone="dim" />
+      </div>
+      {license?.message && <p className={`banner ${license.enterpriseAvailable ? "" : "banner-warn"}`}>{license.message}</p>}
+      <Panel title="Nodes" icon={Network}>
+        {loading ? <p className="muted">Loading nodes...</p> : nodes.length ? nodes.map((node) => <NodeRow key={node.id} node={node} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <p className="muted">No managed nodes configured.</p>}
+      </Panel>
+      <Panel title="Groups" icon={ListFilter}>
+        {groups.length ? groups.map((group) => <div className="history-row" key={group.label}>
+          <div><strong>{group.label}</strong><div className="muted">{group.nodes.join(", ")}</div></div>
+          <span className="grow" />
+          <span className="badge">{group.nodes.length} nodes</span>
+          <span className="badge">{group.units} units</span>
+          <span className="badge badge-running">{group.running} running</span>
+          {group.failed > 0 && <span className="badge badge-failed">{group.failed} failed</span>}
+        </div>) : <p className="muted">Add labels to nodes to create groups.</p>}
+      </Panel>
+    </Page>
+  );
+}
+
+function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: boolean; onChanged: () => void }) {
+  const api = useApi();
+  const { toast } = useApiContext();
+  const scopeText = node.scopes.map((s) => s.system ? s.label : `${s.label} (${s.user || "user"})`).join(", ");
+  async function editLabels() {
+    const value = prompt(`Labels for ${node.local ? "local" : node.id}`, node.labels?.join(", ") || "");
+    if (value == null) return;
+    try {
+      await api(`/api/nodes/${encodeURIComponent(node.id)}/labels`, { method: "PATCH", body: JSON.stringify({ labels: value.split(",") }) });
+      toast("node labels updated");
+      onChanged();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  return (
+    <div className="history-row">
+      <div>
+        <strong>{node.local ? "local" : node.id}</strong>
+        <div className="muted">{scopeText || "no scopes"}</div>
+        {!!node.labels?.length && <div>{node.labels.map((label) => <span className="badge badge-user" key={label}>{label}</span>)}</div>}
+        {node.errors?.length ? <div className="warn-text">{node.errors.join("; ")}</div> : null}
+      </div>
+      <span className="grow" />
+      <span className="badge">{node.units} units</span>
+      <span className="badge badge-running">{node.running} running</span>
+      {node.failed > 0 && <span className="badge badge-failed">{node.failed} failed</span>}
+      {node.unknown > 0 && <span className="badge">{node.unknown} unknown</span>}
+      {editable && <button className="btn btn-sm" onClick={editLabels}><SquarePen size={14} /> labels</button>}
+    </div>
+  );
+}
+
+function PoliciesView() {
+  const api = useApi();
+  const { auth, toast } = useApiContext();
+  const [findings, setFindings] = useState<PolicyFinding[]>([]);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    try {
+      const { body } = await api<{ findings?: PolicyFinding[] }>("/api/policies");
+      setFindings(body.findings || []);
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, toast]);
+  useEffect(() => { load(); }, [load]);
+  const active = findings.filter((f) => !f.waived);
+  const critical = active.filter((f) => f.severity === "critical").length;
+  const warn = active.filter((f) => f.severity === "warn").length;
+  const waived = findings.length - active.length;
+  return (
+    <Page title="Policy" kicker="Fleet checks">
+      <div className="tiles">
+        <MetricTile label="active findings" value={active.length} tone={active.length ? "warn" : "dim"} />
+        <MetricTile label="critical" value={critical} tone={critical ? "bad" : "dim"} />
+        <MetricTile label="warnings" value={warn} tone={warn ? "warn" : "dim"} />
+        <MetricTile label="waived" value={waived} tone="dim" />
+      </div>
+      <Panel title="Findings" icon={Shield}>
+        {loading ? <p className="muted">Scanning Quadlet files...</p> : findings.length ? findings.map((finding) => <PolicyRow key={finding.key} finding={finding} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <p className="muted">No policy findings.</p>}
+      </Panel>
+    </Page>
+  );
+}
+
+function PolicyRow({ finding, editable, onChanged }: { finding: PolicyFinding; editable?: boolean; onChanged: () => void }) {
+  const api = useApi();
+  const { toast } = useApiContext();
+  const badge = finding.severity === "critical" ? "badge-failed" : finding.severity === "warn" ? "badge-warn" : "";
+  async function waive() {
+    const reason = prompt("Reason for waiving this finding", finding.waiverReason || "");
+    if (reason == null) return;
+    try {
+      await api("/api/policies/waivers", { method: "POST", body: JSON.stringify({ key: finding.key, reason }) });
+      toast("policy finding waived");
+      onChanged();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  async function unwaive() {
+    try {
+      await api(`/api/policies/waivers/${encodeURIComponent(finding.key)}`, { method: "DELETE" });
+      toast("policy waiver removed");
+      onChanged();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  return (
+    <div className="history-row">
+      <div>
+        <strong>{finding.policy}</strong>
+        <div className="muted">{finding.node} · {finding.scope}{finding.unit ? ` · ${finding.unit}` : ""}</div>
+        <div>{finding.message}</div>
+        {finding.waived && <div className="muted">waived{finding.waivedBy ? ` by ${finding.waivedBy}` : ""}{finding.waiverReason ? ` · ${finding.waiverReason}` : ""}</div>}
+      </div>
+      <span className="grow" />
+      <span className={`badge ${badge}`}>{finding.severity}</span>
+      {finding.waived && <span className="badge">waived</span>}
+      {editable && (finding.waived ? <button className="btn btn-sm" onClick={unwaive}><X size={14} /> unwaive</button> : <button className="btn btn-sm" onClick={waive}><Check size={14} /> waive</button>)}
+    </div>
+  );
+}
+
 function NewUnit() {
   const api = useApi();
   const { toast } = useApiContext();
@@ -1279,11 +1445,43 @@ function SettingsView({ host }: { host: HostInfo | null }) {
   return (
     <Page title="Settings" kicker="Accounts, authentication, and deployment">
       <div className="tabs">
-        {["Users", "Authentication", "Deployment", "About"].map((name) => <button key={name} className={`tab ${tab === name ? "active" : ""}`} onClick={() => setTab(name)}>{name}</button>)}
+        {["Users", "Authentication", "Deployment", "Backup", "Audit", "About"].map((name) => <button key={name} className={`tab ${tab === name ? "active" : ""}`} onClick={() => setTab(name)}>{name}</button>)}
       </div>
       {tab === "Users" && <UsersSettings />}
-      {tab !== "Users" && <AppSettings tab={tab} host={host} />}
+      {tab === "Backup" && <BackupSettings />}
+      {tab === "Audit" && <AuditSettings />}
+      {tab !== "Users" && tab !== "Backup" && tab !== "Audit" && <AppSettings tab={tab} host={host} />}
     </Page>
+  );
+}
+
+function BackupSettings() {
+  return (
+    <Panel title="Backup" icon={Download} action={<a className="btn btn-accent" href="/api/backup"><Download size={16} /> Download</a>}>
+      <p className="muted">Export Rookery metadata and managed Quadlet files as a tar.gz archive.</p>
+    </Panel>
+  );
+}
+
+function AuditSettings() {
+  const api = useApi();
+  const { toast } = useApiContext();
+  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const load = useCallback(async () => {
+    const { body } = await api<{ events?: AuditEvent[] }>("/api/audit?limit=100");
+    setEvents(body.events || []);
+  }, [api]);
+  useEffect(() => { load().catch((e) => toast((e as Error).message, true)); }, [load, toast]);
+  return (
+    <Panel title="Audit log" icon={FileClock}>
+      {events.length ? events.map((event) => <div className="history-row" key={event.id}>
+        <div>
+          <strong>{event.action}</strong>
+          <div className="muted">{event.actor || "system"} · {event.target || "rookery"} · {event.createdAt ? new Date(event.createdAt).toLocaleString() : "unknown time"}</div>
+          {event.detail != null && <code>{JSON.stringify(event.detail)}</code>}
+        </div>
+      </div>) : <p className="muted">No audit events yet.</p>}
+    </Panel>
   );
 }
 
@@ -1373,6 +1571,7 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
   const api = useApi();
   const { toast } = useApiContext();
   const [groups, setGroups] = useState<SettingGroup[]>([]);
+  const [license, setLicense] = useState<LicenseStatus | null>(null);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [restart, setRestart] = useState(false);
   const load = useCallback(async () => {
@@ -1381,6 +1580,12 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
     setDraft({});
   }, [api]);
   useEffect(() => { load().catch((e) => toast((e as Error).message, true)); }, [load, toast]);
+  useEffect(() => {
+    if (tab !== "About") return;
+    api<{ license?: LicenseStatus }>("/api/license")
+      .then(({ body }) => setLicense(body.license || null))
+      .catch((e) => toast((e as Error).message, true));
+  }, [api, tab, toast]);
   const group = groups.find((g) => g.name === tab);
   async function save() {
     try {
@@ -1398,8 +1603,11 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
       ["podman", host?.podman?.version || "unknown"],
       ["SELinux", host?.selinuxEnforcing ? "enforcing" : "not enforcing"],
       ["validator", host?.generatorAvailable ? "available" : "unavailable"],
+      ["edition", license?.edition || "unknown"],
+      ["managed nodes", license ? `${license.managedNodes}/${license.nodeLimit}` : "unknown"],
+      ["enforcement", license?.enforcement || "unknown"],
     ];
-    return <Panel title="About" icon={Activity}><InfoGrid rows={rows} /></Panel>;
+    return <Panel title="About" icon={Activity}><InfoGrid rows={rows} />{license?.message && <p className={`banner ${license.enterpriseAvailable ? "" : "banner-warn"}`}>{license.message}</p>}</Panel>;
   }
   return (
     <Panel title={tab} icon={tab === "Authentication" ? Shield : HardDrive} action={Object.keys(draft).length > 0 ? <button className="btn btn-accent" onClick={save}><Save size={16} /> Save</button> : null}>

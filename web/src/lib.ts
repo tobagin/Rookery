@@ -49,6 +49,62 @@ export interface HostInfo {
   scopes?: string[];
 }
 
+export interface LicenseStatus {
+  edition: string;
+  plan: string;
+  managedNodes: number;
+  nodeLimit: number;
+  nodes: string[];
+  enterpriseAvailable: boolean;
+  enforcement: string;
+  message: string;
+}
+
+export interface ManagedNode {
+  id: string;
+  address?: string;
+  local: boolean;
+  scopes: Array<{ label: string; user?: string; system: boolean }>;
+  labels?: string[];
+  unitDirs: string[];
+  units: number;
+  running: number;
+  failed: number;
+  unknown: number;
+  errors?: string[];
+}
+
+export interface NodeGroup {
+  label: string;
+  nodes: string[];
+  units: number;
+  running: number;
+  failed: number;
+  unknown: number;
+}
+
+export interface PolicyFinding {
+  key: string;
+  policy: string;
+  severity: string;
+  node: string;
+  scope: string;
+  unit?: string;
+  message: string;
+  waived?: boolean;
+  waiverReason?: string;
+  waivedBy?: string;
+}
+
+export interface AuditEvent {
+  id: number;
+  actor: string;
+  action: string;
+  target: string;
+  detail?: unknown;
+  createdAt?: string;
+}
+
 export interface ValidationResult {
   available?: boolean;
   valid?: boolean;

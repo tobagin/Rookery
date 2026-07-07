@@ -50,6 +50,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "user.create", req.Username, map[string]any{"role": req.Role, "emailSet": req.Email != ""})
 	writeJSON(w, http.StatusOK, map[string]any{"created": req.Username, "role": req.Role})
 }
 
@@ -61,6 +62,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "user.delete", r.PathValue("name"), nil)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": r.PathValue("name")})
 }
 
@@ -92,6 +94,7 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "user.update", r.PathValue("name"), map[string]any{"role": req.Role, "emailSet": email != ""})
 	writeJSON(w, http.StatusOK, map[string]any{"updated": r.PathValue("name")})
 }
 
@@ -110,5 +113,6 @@ func (s *Server) handleSetUserPassword(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "user.password", r.PathValue("name"), nil)
 	writeJSON(w, http.StatusOK, map[string]any{"updated": r.PathValue("name")})
 }
