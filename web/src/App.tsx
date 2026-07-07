@@ -1230,7 +1230,7 @@ function NewUnit() {
     <Page title="New unit" kicker="Create a Quadlet from a starter template" back={<BackButton />}>
       <Panel title="Definition" icon={Plus}>
         <div className="filterbar">
-          <input className="input" placeholder="name, e.g. jellyfin" value={baseName} onChange={(e) => setBaseName(e.target.value)} />
+          <input className="input" placeholder="name, e.g. nginx-edge" value={baseName} onChange={(e) => setBaseName(e.target.value)} />
           <select className="input" value={kind} onChange={(e) => changeKind(e.target.value)}>{Object.keys(TEMPLATES).map((k) => <option key={k}>{k}</option>)}</select>
           <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
         </div>

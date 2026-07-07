@@ -52,7 +52,7 @@ export const IMPORT_MODES = {
   run: {
     label: "podman run command",
     help: "Paste a podman run or docker run command; multi-line commands with backslashes are supported.",
-    placeholder: "podman run -d --name jellyfin -p 8096:8096 -v /srv/media:/media:Z docker.io/jellyfin/jellyfin:latest",
+    placeholder: "podman run -d --name nginx-edge -p 8080:8080 docker.io/nginxinc/nginx-unprivileged:1.27-alpine",
   },
   compose: {
     label: "compose file",
