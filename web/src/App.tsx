@@ -1137,6 +1137,8 @@ function PoliciesView() {
   const { auth, toast } = useApiContext();
   const [findings, setFindings] = useState<PolicyFinding[]>([]);
   const [loading, setLoading] = useState(true);
+  const [severity, setSeverity] = useState("all");
+  const [visibility, setVisibility] = useState<"active" | "all" | "waived">("active");
   const load = useCallback(async () => {
     try {
       const { body } = await api<{ findings?: PolicyFinding[] }>("/api/policies");
@@ -1152,6 +1154,17 @@ function PoliciesView() {
   const critical = active.filter((f) => f.severity === "critical").length;
   const warn = active.filter((f) => f.severity === "warn").length;
   const waived = findings.length - active.length;
+  const severityCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: findings.length, critical: 0, warn: 0, info: 0 };
+    findings.forEach((f) => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+    return counts;
+  }, [findings]);
+  const filtered = findings.filter((finding) => {
+    if (severity !== "all" && finding.severity !== severity) return false;
+    if (visibility === "active" && finding.waived) return false;
+    if (visibility === "waived" && !finding.waived) return false;
+    return true;
+  });
   return (
     <Page title="Policy" kicker="Fleet checks">
       <div className="tiles">
@@ -1161,7 +1174,15 @@ function PoliciesView() {
         <MetricTile label="waived" value={waived} tone="dim" />
       </div>
       <Panel title="Findings" icon={Shield}>
-        {loading ? <p className="muted">Scanning Quadlet files...</p> : findings.length ? findings.map((finding) => <PolicyRow key={finding.key} finding={finding} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <p className="muted">No policy findings.</p>}
+        <div className="filterbar">
+          <div className="segmented text-segmented" aria-label="Policy severity filter">
+            {["all", "critical", "warn", "info"].map((s) => <button key={s} className={severity === s ? "active" : ""} onClick={() => setSeverity(s)}>{s} <span>{severityCounts[s] || 0}</span></button>)}
+          </div>
+          <div className="segmented text-segmented" aria-label="Policy waiver filter">
+            {(["active", "all", "waived"] as const).map((s) => <button key={s} className={visibility === s ? "active" : ""} onClick={() => setVisibility(s)}>{s}</button>)}
+          </div>
+        </div>
+        {loading ? <p className="muted">Scanning Quadlet files...</p> : filtered.length ? filtered.map((finding) => <PolicyRow key={finding.key} finding={finding} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <EmptyState title="No matching findings" text="Adjust the policy filters or clear waivers." />}
       </Panel>
     </Page>
   );

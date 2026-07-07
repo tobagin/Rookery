@@ -187,6 +187,10 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
 }
 .segmented button:hover { color: var(--text); background: var(--row-hover); }
 .segmented button.active { color: white; background: var(--accent); }
+.text-segmented button {
+  width: auto; min-width: 62px; padding: 0 10px; gap: 6px; display: inline-flex; text-transform: capitalize;
+}
+.text-segmented button span { color: inherit; opacity: .78; font-variant-numeric: tabular-nums; }
 
 .panel {
   background: var(--surface);
