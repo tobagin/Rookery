@@ -20,6 +20,8 @@ GitHub release notes may include the full commit list.
   About displays for clearer Enterprise Free allowance visibility.
 - Improved Settings → Users with account summary tiles, role/search filters,
   and setup-required badges for local accounts.
+- Improved Settings → Audit with event summary tiles, actor/action/search
+  filters, refresh control, and wrapped JSON details.
 - Added an initial read-only edition/license status API and Settings/About
   display for the planned 3-node Enterprise Free model. Enforcement remains
   disabled in alpha.

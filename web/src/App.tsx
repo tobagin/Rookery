@@ -1596,21 +1596,49 @@ function AuditSettings() {
   const api = useApi();
   const { toast } = useApiContext();
   const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [q, setQ] = useState("");
+  const [actor, setActor] = useState("all");
+  const [action, setAction] = useState("all");
   const load = useCallback(async () => {
     const { body } = await api<{ events?: AuditEvent[] }>("/api/audit?limit=100");
     setEvents(body.events || []);
   }, [api]);
   useEffect(() => { load().catch((e) => toast((e as Error).message, true)); }, [load, toast]);
+  const actors = ["all", ...Array.from(new Set(events.map((event) => event.actor || "system"))).sort()];
+  const actions = ["all", ...Array.from(new Set(events.map((event) => event.action))).sort()];
+  const filtered = events.filter((event) => {
+    const eventActor = event.actor || "system";
+    const needle = q.trim().toLowerCase();
+    if (actor !== "all" && eventActor !== actor) return false;
+    if (action !== "all" && event.action !== action) return false;
+    return !needle || `${event.action} ${eventActor} ${event.target || ""} ${JSON.stringify(event.detail || "")}`.toLowerCase().includes(needle);
+  });
+  const authEvents = events.filter((event) => event.action.startsWith("auth.") || event.action.startsWith("setup.") || event.action.startsWith("onboarding.")).length;
+  const unitEvents = events.filter((event) => event.action.startsWith("unit.")).length;
+  const adminEvents = events.length - authEvents - unitEvents;
   return (
-    <Panel title="Audit log" icon={FileClock}>
-      {events.length ? events.map((event) => <div className="history-row" key={event.id}>
+    <>
+      <div className="tiles">
+        <MetricTile label="events loaded" value={events.length} tone={events.length ? "ok" : "dim"} />
+        <MetricTile label="unit events" value={unitEvents} tone={unitEvents ? "ok" : "dim"} />
+        <MetricTile label="auth events" value={authEvents} tone={authEvents ? "ok" : "dim"} />
+        <MetricTile label="admin events" value={adminEvents} tone={adminEvents ? "warn" : "dim"} />
+      </div>
+      <Panel title="Audit log" icon={FileClock} action={<button className="btn btn-sm" onClick={load}><RefreshCw size={14} /> Refresh</button>}>
+        <div className="filterbar">
+          <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter audit events..." /></label>
+          <select className="input" value={actor} onChange={(e) => setActor(e.target.value)}>{actors.map((name) => <option key={name}>{name}</option>)}</select>
+          <select className="input" value={action} onChange={(e) => setAction(e.target.value)}>{actions.map((name) => <option key={name}>{name}</option>)}</select>
+        </div>
+        {filtered.length ? filtered.map((event) => <div className="history-row audit-row" key={event.id}>
         <div>
           <strong>{event.action}</strong>
           <div className="muted">{event.actor || "system"} · {event.target || "rookery"} · {event.createdAt ? new Date(event.createdAt).toLocaleString() : "unknown time"}</div>
           {event.detail != null && <code>{JSON.stringify(event.detail)}</code>}
         </div>
-      </div>) : <p className="muted">No audit events yet.</p>}
-    </Panel>
+      </div>) : <EmptyState title="No matching audit events" text="Adjust the audit filters or refresh the log." />}
+      </Panel>
+    </>
   );
 }
 
