@@ -13,6 +13,9 @@ GitHub release notes may include the full commit list.
   Units list for faster operational scanning.
 - Added severity and waiver-status filters to the Policy page so critical
   active findings stay easy to isolate as fleets grow.
+- Clarified the Enterprise Free model in the license API, About panel, and
+  docs: local users and SSO identities are unlimited; node scale is the
+  commercial boundary.
 - Added an initial read-only edition/license status API and Settings/About
   display for the planned 3-node Enterprise Free model. Enforcement remains
   disabled in alpha.

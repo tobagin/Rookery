@@ -195,6 +195,12 @@ func TestLicenseStatusCountsUniqueManagedNodes(t *testing.T) {
 	if lic["enterpriseAvailable"] != true {
 		t.Fatalf("enterpriseAvailable = %v, want true", lic["enterpriseAvailable"])
 	}
+	if got := int(lic["localUserLimit"].(float64)); got != 0 {
+		t.Fatalf("localUserLimit = %d, want 0 for unlimited", got)
+	}
+	if got := int(lic["ssoUserLimit"].(float64)); got != 0 {
+		t.Fatalf("ssoUserLimit = %d, want 0 for unlimited", got)
+	}
 	nodes := lic["nodes"].([]any)
 	if len(nodes) != 2 || nodes[0] != "local" || nodes[1] != "root@nas.local" {
 		t.Fatalf("nodes = %#v, want local/root@nas.local", nodes)
@@ -219,6 +225,9 @@ func TestLicenseStatusFlagsAboveFreeAllowanceWithoutEnforcement(t *testing.T) {
 	}
 	if lic["enforcement"] != "disabled" {
 		t.Fatalf("enforcement = %v, want disabled", lic["enforcement"])
+	}
+	if got := int(lic["ssoUserLimit"].(float64)); got != 0 {
+		t.Fatalf("ssoUserLimit = %d, want unlimited even above node allowance", got)
 	}
 }
 

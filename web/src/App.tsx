@@ -1726,6 +1726,7 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
     }
   }
   if (tab === "About") {
+    const limitText = (n?: number) => n === 0 ? "unlimited" : n == null ? "unknown" : String(n);
     const rows: Array<[string, string]> = [
       ["version", String(group?.items.find((i) => i.key === "version")?.value || "dev")],
       ["podman", host?.podman?.version || "unknown"],
@@ -1733,6 +1734,8 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
       ["validator", host?.generatorAvailable ? "available" : "unavailable"],
       ["edition", license?.edition || "unknown"],
       ["managed nodes", license ? `${license.managedNodes}/${license.nodeLimit}` : "unknown"],
+      ["local users", limitText(license?.localUserLimit)],
+      ["SSO users", limitText(license?.ssoUserLimit)],
       ["enforcement", license?.enforcement || "unknown"],
     ];
     return <Panel title="About" icon={Activity}><InfoGrid rows={rows} />{license?.message && <p className={`banner ${license.enterpriseAvailable ? "" : "banner-warn"}`}>{license.message}</p>}</Panel>;

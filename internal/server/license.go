@@ -9,6 +9,8 @@ type LicenseStatus struct {
 	Plan                string   `json:"plan"`
 	ManagedNodes        int      `json:"managedNodes"`
 	NodeLimit           int      `json:"nodeLimit"`
+	LocalUserLimit      int      `json:"localUserLimit"`
+	SSOUserLimit        int      `json:"ssoUserLimit"`
 	Nodes               []string `json:"nodes"`
 	EnterpriseAvailable bool     `json:"enterpriseAvailable"`
 	Enforcement         string   `json:"enforcement"`
@@ -34,13 +36,15 @@ func (s *Server) licenseStatus() LicenseStatus {
 		Plan:                "enterprise_free",
 		ManagedNodes:        len(nodes),
 		NodeLimit:           enterpriseFreeNodeLimit,
+		LocalUserLimit:      0,
+		SSOUserLimit:        0,
 		Nodes:               nodes,
 		EnterpriseAvailable: len(nodes) <= enterpriseFreeNodeLimit,
 		Enforcement:         "disabled",
-		Message:             "Full Enterprise feature set is planned to be free for up to three managed nodes; enforcement is not active in this alpha.",
+		Message:             "Enterprise Free includes unlimited local and SSO users for up to three managed nodes; enforcement is not active in this alpha.",
 	}
 	if !status.EnterpriseAvailable {
-		status.Message = "This instance is above the planned three-node Enterprise Free allowance; enforcement is not active in this alpha."
+		status.Message = "This instance is above the planned three-node Enterprise Free allowance; users and SSO remain unlimited, and enforcement is not active in this alpha."
 	}
 	return status
 }

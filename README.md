@@ -288,7 +288,7 @@ Design rules (from the [PRD](docs/PRD.md)):
 | `POST /api/units/{scope}/{name}/update` | pull new image + restart |
 | `GET /api/gpus` | GPU inventory, local + every remote host |
 | `GET /api/host` | metrics, Podman info, scopes |
-| `GET /api/license` | edition, planned 3-node Enterprise Free allowance, managed-node count |
+| `GET /api/license` | edition, planned 3-node Enterprise Free allowance, managed-node count, unlimited user/SSO allowances |
 | `GET /api/nodes` | managed-node inventory grouped from local and remote scopes |
 | `GET /api/groups` | label-derived node groups for fleet organization |
 | `PATCH /api/nodes/{id}/labels` | save Rookery-owned node labels for fleet organization |
@@ -336,7 +336,9 @@ cases isn't worth it — open an issue if you hit a real gap).
 
 Multi-admin accounts with a viewer role shipped with the first-run wizard;
 OIDC / external SSO is available for deployments that already have an
-identity provider.
+identity provider. Rookery's planned Enterprise Free model does not cap local
+users or SSO identities; the commercial boundary is managed-node scale and
+fleet governance.
 
 - **v2**: systemd credentials alongside podman secrets, pod-level log
   interleaving.

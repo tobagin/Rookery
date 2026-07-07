@@ -147,7 +147,8 @@ orchestration; Docker-only users who do not intend to move to Podman/Quadlet.
   not become hostage features.
 - **Enterprise Free**: full Enterprise feature set for up to **three managed
   nodes**. This is the default commercial adoption path for homelabs and small
-  teams that want to evaluate the complete product.
+  teams that want to evaluate the complete product. Local users and OIDC/SSO
+  identities are unlimited; secure authentication is not a paid-seat boundary.
 - **Enterprise Paid**: required above three managed nodes, sold on fleet
   scale, governance, audit, backup, optional agents, policy, and support.
 - **Node definition**: a node is any host managed by Rookery, including the
@@ -238,8 +239,8 @@ Quadlet-native, rootless-aware, GPU-aware, and product-grade for fleets.
 - **Commercial model**: Community remains useful; Enterprise is free for the
   first three managed nodes and paid beyond that.
 - **Paid boundary**: Enterprise monetizes fleet scale, governance, audit,
-  backups, policy, optional agents, support, and team controls — not basic
-  Quadlet lifecycle.
+  backups, policy, optional agents, support, and advanced team controls — not
+  basic Quadlet lifecycle, local accounts, or OIDC/SSO user count.
 - **Agent posture**: agentless SSH remains core; optional agents are an
   Enterprise fleet capability.
 
