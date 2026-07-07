@@ -644,7 +644,7 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
           ))}
         </div>
       )}
-      <div className="filterbar">
+      <div className="filterbar units-filterbar">
         <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name, image, pod..." /></label>
         <select className="input" value={kind} onChange={(e) => setKind(e.target.value)}>{kinds.map((k) => <option key={k}>{k}</option>)}</select>
         <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
@@ -1384,7 +1384,7 @@ function ImportView() {
                 <textarea className="code-editor" placeholder={selectedMode.placeholder} value={input} onChange={(e) => setInput(e.target.value)} />
               </>
             )}
-            <button className="btn btn-accent" onClick={convert}><RefreshCw size={16} /> Convert</button>
+            <div className="import-convert-row"><button className="btn btn-accent" onClick={convert}><RefreshCw size={16} /> Convert</button></div>
           </div>
         </div>
       </Panel>

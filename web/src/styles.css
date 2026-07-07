@@ -215,6 +215,7 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
 .meter-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
 
 .unit-list { display: flex; flex-direction: column; gap: 7px; }
+.units-filterbar { margin-bottom: 14px; }
 .unit-row {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px;
   padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--row); color: var(--text);
@@ -275,6 +276,7 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
 .source-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .source-card-head h2 { color: var(--text); font-size: 16px; letter-spacing: 0; text-transform: none; }
 .scope-picker { display: grid; gap: 4px; min-width: 150px; color: var(--muted); font-size: 12px; }
+.import-convert-row { display: flex; justify-content: center; width: 100%; margin-top: 12px; }
 .detail-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); }
 .info-grid { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; margin: 0; }
 .info-grid dt { color: var(--muted); }
