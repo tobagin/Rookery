@@ -1283,20 +1283,63 @@ function ImportView() {
     }
   }
 
+  function selectKind(next: keyof typeof IMPORT_MODES) {
+    setKind(next);
+    setInput("");
+    setResults([]);
+  }
+
+  function useSample() {
+    if (kind === "container") return;
+    setInput(IMPORT_MODES[kind].placeholder);
+  }
+
+  const selectedMode = IMPORT_MODES[kind];
+
   return (
     <Page title="Import" kicker="Convert existing definitions into Quadlets" back={<BackButton />}>
       <Panel title="Source" icon={Import}>
-        <div className="filterbar">
-          <select className="input" value={kind} onChange={(e) => { setKind(e.target.value as keyof typeof IMPORT_MODES); setInput(""); setResults([]); }}>
-            {Object.entries(IMPORT_MODES).map(([k, m]) => <option value={k} key={k}>{m.label}</option>)}
-          </select>
-          <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
+        <div className="import-layout">
+          <div className="import-modes" role="tablist" aria-label="Import source type">
+            {Object.entries(IMPORT_MODES).map(([k, m]) => {
+              const active = k === kind;
+              return (
+                <button className={`import-mode-card ${active ? "active" : ""}`} key={k} type="button" role="tab" aria-selected={active} onClick={() => selectKind(k as keyof typeof IMPORT_MODES)}>
+                  <span className="import-mode-icon">{k === "container" ? <Boxes size={18} /> : k === "compose" ? <ListFilter size={18} /> : <Import size={18} />}</span>
+                  <span>
+                    <strong>{m.label}</strong>
+                    <small>{m.help}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="source-card">
+            <div className="source-card-head">
+              <div>
+                <p className="kicker">Selected source</p>
+                <h2>{selectedMode.label}</h2>
+              </div>
+              <label className="scope-picker">
+                <span>Target scope</span>
+                <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
+              </label>
+            </div>
+            <p className="muted">{selectedMode.help}</p>
+            {kind === "container" ? (
+              containers.length ? <select className="input wide" value={input} onChange={(e) => setInput(e.target.value)}>{containers.map((c) => <option key={c.id} value={c.id} disabled={c.managed}>{c.name} - {c.image} ({c.state}){c.managed ? " - already managed" : ""}</option>)}</select> : <p className="banner banner-warn">No containers found via the Podman API socket.</p>
+            ) : (
+              <>
+                <div className="editor-actions">
+                  <button className="btn btn-sm" type="button" onClick={useSample}><SquarePen size={14} /> Use sample</button>
+                  {input && <button className="btn btn-sm btn-ghost" type="button" onClick={() => setInput("")}><X size={14} /> Clear</button>}
+                </div>
+                <textarea className="code-editor" placeholder={selectedMode.placeholder} value={input} onChange={(e) => setInput(e.target.value)} />
+              </>
+            )}
+            <button className="btn btn-accent" onClick={convert}><RefreshCw size={16} /> Convert</button>
+          </div>
         </div>
-        <p className="muted">{IMPORT_MODES[kind].help}</p>
-        {kind === "container" ? (
-          containers.length ? <select className="input wide" value={input} onChange={(e) => setInput(e.target.value)}>{containers.map((c) => <option key={c.id} value={c.id} disabled={c.managed}>{c.name} - {c.image} ({c.state}){c.managed ? " - already managed" : ""}</option>)}</select> : <p className="banner banner-warn">No containers found via the Podman API socket.</p>
-        ) : <textarea className="code-editor" placeholder={IMPORT_MODES[kind].placeholder} value={input} onChange={(e) => setInput(e.target.value)} />}
-        <button className="btn btn-accent" onClick={convert}><RefreshCw size={16} /> Convert</button>
       </Panel>
       {results.length > 0 && <Panel title={`${results.length} generated unit${results.length === 1 ? "" : "s"}`} icon={Boxes}>{results.map((r, i) => <ImportResult key={i} unit={r} scope={scope} />)}</Panel>}
     </Page>

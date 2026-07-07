@@ -7,6 +7,8 @@ GitHub release notes may include the full commit list.
 
 - Added dark/light/auto theme switching, grouped sidebar navigation, and a
   more professional operations-console visual polish pass.
+- Polished the Import page with source-type cards, clearer target-scope
+  selection, and one-click sample input for command and compose imports.
 - Added an initial read-only edition/license status API and Settings/About
   display for the planned 3-node Enterprise Free model. Enforcement remains
   disabled in alpha.

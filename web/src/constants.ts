@@ -57,7 +57,19 @@ export const IMPORT_MODES = {
   compose: {
     label: "compose file",
     help: "Paste a Docker Compose or podman-compose YAML file. Services become container units.",
-    placeholder: "services:\n  app:\n    image: ...",
+    placeholder: `services:
+  edge:
+    image: docker.io/nginxinc/nginx-unprivileged:1.27-alpine
+    ports:
+      - "8080:8080"
+  cache:
+    image: docker.io/library/redis:7-alpine
+    volumes:
+      - cache-data:/data
+
+volumes:
+  cache-data:
+`,
   },
   container: {
     label: "running container",
