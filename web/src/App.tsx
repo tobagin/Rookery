@@ -386,7 +386,7 @@ function isActive(pathname: string, to: string) {
 }
 
 function BrandMark() {
-  return <span className="brand-mark" aria-hidden="true">R</span>;
+  return <span className="brand-mark" aria-hidden="true">🦭</span>;
 }
 
 function LoginView({ reloadAuth }: { reloadAuth: () => Promise<void> }) {
