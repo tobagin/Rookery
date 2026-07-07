@@ -9,6 +9,8 @@ GitHub release notes may include the full commit list.
   more professional operations-console visual polish pass.
 - Polished the Import page with source-type cards, clearer target-scope
   selection, and one-click sample input for command and compose imports.
+- Added status-count filters and a persisted compact-density option to the
+  Units list for faster operational scanning.
 - Added an initial read-only edition/license status API and Settings/About
   display for the planned 3-node Enterprise Free model. Enforcement remains
   disabled in alpha.

@@ -604,29 +604,54 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
   const [q, setQ] = useState("");
   const [kind, setKind] = useState("all");
   const [scope, setScope] = useState("all");
+  const [status, setStatus] = useState<UnitState | "all">(failedOnly ? "failed" : "all");
+  const [compact, setCompact] = useState(() => localStorage.getItem("rookery-units-density") === "compact");
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return units.filter((u) => {
-      if (failedOnly && stateClass(u) !== "failed") return false;
+      const cls = stateClass(u);
+      if (failedOnly && cls !== "failed") return false;
       if (kind !== "all" && u.kind !== kind) return false;
       if (scope !== "all" && u.scope !== scope) return false;
+      if (status !== "all" && cls !== status) return false;
       return !needle || `${u.name} ${u.description || ""} ${u.image || ""} ${u.pod || ""}`.toLowerCase().includes(needle);
     });
-  }, [failedOnly, kind, q, scope, units]);
+  }, [failedOnly, kind, q, scope, status, units]);
   const kinds = ["all", ...Array.from(new Set(units.map((u) => u.kind))).sort()];
   const scopes = ["all", ...Array.from(new Set(units.map((u) => u.scope))).sort()];
+  const statusCounts = useMemo(() => {
+    const counts: Record<UnitState | "all", number> = { all: units.length, running: 0, failed: 0, pending: 0, stopped: 0, unknown: 0 };
+    units.forEach((u) => { counts[stateClass(u)] += 1; });
+    return counts;
+  }, [units]);
+
+  useEffect(() => {
+    localStorage.setItem("rookery-units-density", compact ? "compact" : "comfortable");
+  }, [compact]);
 
   return (
     <Page title={failedOnly ? "Failed units" : "Units"} kicker={failedOnly ? "Triage and restart" : "Search, filter, and act"}>
       <ScopeErrors errors={scopeErrors} />
       {error && <p className="banner banner-error">{error}</p>}
+      {!failedOnly && (
+        <div className="status-filter" aria-label="Filter units by status">
+          {(["all", "running", "failed", "pending", "stopped", "unknown"] as Array<UnitState | "all">).map((s) => (
+            <button key={s} className={`status-pill ${status === s ? "active" : ""}`} onClick={() => setStatus(s)}>
+              <span className={s === "all" ? "dot all" : `dot ${s}`} />
+              <span>{s}</span>
+              <strong>{statusCounts[s]}</strong>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="filterbar">
         <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name, image, pod..." /></label>
         <select className="input" value={kind} onChange={(e) => setKind(e.target.value)}>{kinds.map((k) => <option key={k}>{k}</option>)}</select>
         <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
+        <label className="check density-toggle"><input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} /> compact rows</label>
       </div>
       {loading ? <p className="muted">Loading units...</p> : filtered.length ? (
-        <div className="unit-list">{filtered.map((u) => <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={reload} />)}</div>
+        <div className="unit-list">{filtered.map((u) => <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={reload} compact={compact} />)}</div>
       ) : <EmptyState title="No matching units" text="Adjust the filters or create a new unit." />}
     </Page>
   );
