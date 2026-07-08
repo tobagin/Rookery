@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -407,7 +408,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
-	area, name, _, exists, ok := s.resolveUnit(w, r)
+	area, name, path, exists, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
 	}
@@ -432,9 +433,11 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	case "restart":
 		err = s.sysd.Restart(r.Context(), area.Scope, service)
 	case "enable":
-		err = s.sysd.Enable(r.Context(), area.Scope, service)
+		s.setQuadletInstall(w, r, area, name, path, true)
+		return
 	case "disable":
-		err = s.sysd.Disable(r.Context(), area.Scope, service)
+		s.setQuadletInstall(w, r, area, name, path, false)
+		return
 	default:
 		httpError(w, http.StatusBadRequest, "unknown action "+strconv.Quote(req.Action))
 		return
@@ -443,9 +446,97 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	path := joinUnitPath(area, area.Dirs[0], name)
 	s.audit(r, "unit."+req.Action, area.Label+"/"+name, map[string]any{"scope": area.Label, "unit": name, "service": service})
 	writeJSON(w, http.StatusOK, map[string]any{"unit": s.unitJSONFor(r, area, name, path)})
+}
+
+func (s *Server) setQuadletInstall(w http.ResponseWriter, r *http.Request, area Area, name, path string, enabled bool) {
+	if filepath.Dir(path) != area.Dirs[0] {
+		httpError(w, http.StatusConflict, "unit lives in a read-only directory")
+		return
+	}
+	data, err := areaReadFile(r.Context(), area, path)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	target := "multi-user.target"
+	if !area.Scope.IsSystem() {
+		target = "default.target"
+	}
+	content := setInstallEnabled(string(data), enabled, target)
+	action := "disable"
+	if enabled {
+		action = "enable"
+	}
+	validation, warnings, saved, err := s.applySave(r, area, name, path, content, false, "rookery: "+action+" "+name)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !saved {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": validation})
+		return
+	}
+	service, _ := quadlet.ServiceName(name)
+	s.audit(r, "unit."+action, area.Label+"/"+name, map[string]any{"scope": area.Label, "unit": name, "service": service})
+	writeJSON(w, http.StatusOK, map[string]any{"unit": s.unitJSONFor(r, area, name, path), "warnings": warnings})
+}
+
+func setInstallEnabled(content string, enabled bool, target string) string {
+	lines := strings.Split(content, "\n")
+	inInstall := false
+	installSeen := false
+	hasWantedBy := false
+	inserted := false
+	out := make([]string, 0, len(lines)+3)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		isSection := strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")
+		if isSection {
+			if enabled && inInstall && !hasWantedBy && !inserted {
+				out = append(out, "WantedBy="+target)
+				inserted = true
+			}
+			inInstall = trimmed == "[Install]"
+			if inInstall {
+				installSeen = true
+				hasWantedBy = false
+			}
+			out = append(out, line)
+			continue
+		}
+		if inInstall {
+			key, _, hasValue := strings.Cut(trimmed, "=")
+			if hasValue {
+				switch key {
+				case "WantedBy", "RequiredBy":
+					if !enabled {
+						continue
+					}
+					hasWantedBy = true
+				case "Alias":
+					if !enabled {
+						continue
+					}
+				}
+			}
+		}
+		out = append(out, line)
+	}
+	if enabled {
+		switch {
+		case inInstall && !hasWantedBy && !inserted:
+			out = append(out, "WantedBy="+target)
+		case !installSeen:
+			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+				out = append(out, "")
+			}
+			out = append(out, "[Install]", "WantedBy="+target)
+		}
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
 }
 
 func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {

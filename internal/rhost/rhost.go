@@ -56,7 +56,7 @@ func Script(userSession bool, argv []string) string {
 // Argv builds the full local ssh invocation that runs script on target.
 func Argv(target, script string) []string {
 	out := append([]string{}, SSHCommand...)
-	return append(out, target, "--", script)
+	return append(out, target, "--", "sh", "-c", Quote(script))
 }
 
 // Error is a failed remote execution. ssh reserves exit code 255 for

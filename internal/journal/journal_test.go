@@ -30,7 +30,7 @@ func TestCommandRemote(t *testing.T) {
 	if !strings.HasPrefix(joined, "ssh ") || !strings.Contains(joined, "bob@nas") {
 		t.Errorf("remote journal cmd = %q", joined)
 	}
-	for _, want := range []string{"'journalctl'", "'--user'", "'-u' 'web.service'", "XDG_RUNTIME_DIR"} {
+	for _, want := range []string{"sh -c", "journalctl", "_SYSTEMD_USER_UNIT=web.service", "_UID=$(id -u)", "XDG_RUNTIME_DIR"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args %q missing %q", joined, want)
 		}

@@ -615,6 +615,55 @@ func TestAction(t *testing.T) {
 	}
 }
 
+func TestActionEnableDisableMutatesInstallSection(t *testing.T) {
+	srv, sysd, dir := newTestServer(t, okValidator)
+	path := filepath.Join(dir, "jellyfin.container")
+	if err := os.WriteFile(path, []byte("[Container]\nImage=x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := doJSON(t, srv, "POST", "/api/units/system/jellyfin.container/action", `{"action":"enable"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enable: status %d: %s", rec.Code, rec.Body.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); !strings.Contains(got, "[Install]\nWantedBy=multi-user.target\n") {
+		t.Fatalf("enable content = %q", got)
+	}
+	if len(sysd.calls) != 1 || !strings.HasPrefix(sysd.calls[0], "daemon-reload system") {
+		t.Fatalf("enable systemd calls = %v, want daemon-reload only", sysd.calls)
+	}
+
+	rec, _ = doJSON(t, srv, "POST", "/api/units/system/jellyfin.container/action", `{"action":"disable"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable: status %d: %s", rec.Code, rec.Body.String())
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); strings.Contains(got, "WantedBy=") || strings.Contains(got, "RequiredBy=") || strings.Contains(got, "Alias=") {
+		t.Fatalf("disable content still has install links = %q", got)
+	}
+}
+
+func TestSetInstallEnabledPreservesExistingInstall(t *testing.T) {
+	content := "# keep\n[Unit]\nDescription=x\n\n[Install]\n# keep install comment\nWantedBy=default.target\nAlias=x.service\n"
+	got := setInstallEnabled(content, false, "multi-user.target")
+	if !strings.Contains(got, "# keep install comment") {
+		t.Fatalf("disable dropped comments: %q", got)
+	}
+	if strings.Contains(got, "WantedBy=") || strings.Contains(got, "Alias=") {
+		t.Fatalf("disable kept install links: %q", got)
+	}
+	got = setInstallEnabled(got, true, "multi-user.target")
+	if !strings.Contains(got, "WantedBy=multi-user.target") {
+		t.Fatalf("enable did not add wanted target: %q", got)
+	}
+}
+
 func TestDeleteUnit(t *testing.T) {
 	srv, sysd, dir := newTestServer(t, okValidator)
 	rec, _ := doJSON(t, srv, "DELETE", "/api/units/system/jellyfin.container", "")

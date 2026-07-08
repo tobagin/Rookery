@@ -48,7 +48,10 @@ func TestRemoteScope(t *testing.T) {
 	}
 	call := strings.Join(f.calls[0], " ")
 	if !strings.HasPrefix(call, "ssh ") || !strings.Contains(call, "root@nas") ||
-		!strings.Contains(call, "'systemctl' 'start' 'x.service'") {
+		!strings.Contains(call, "sh -c") ||
+		!strings.Contains(call, "systemctl") ||
+		!strings.Contains(call, "start") ||
+		!strings.Contains(call, "x.service") {
 		t.Errorf("remote system call = %q", call)
 	}
 	if strings.Contains(call, "--user") {
@@ -62,7 +65,11 @@ func TestRemoteScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	call = strings.Join(f2.calls[0], " ")
-	if !strings.Contains(call, "'systemctl' '--user' 'stop' 'x.service'") ||
+	if !strings.Contains(call, "sh -c") ||
+		!strings.Contains(call, "systemctl") ||
+		!strings.Contains(call, "--user") ||
+		!strings.Contains(call, "stop") ||
+		!strings.Contains(call, "x.service") ||
 		!strings.Contains(call, "XDG_RUNTIME_DIR") {
 		t.Errorf("remote user call = %q", call)
 	}
