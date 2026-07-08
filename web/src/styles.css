@@ -384,6 +384,11 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
   .top-actions .btn-ghost { display: none; }
 }
 
+@media (max-width: 1180px) {
+  .dashboard-grid { grid-template-columns: 1fr; }
+  .dashboard-grid .gpu-row { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 520px) {
   .tiles { grid-template-columns: 1fr 1fr; }
   .tile { padding: 10px; }
