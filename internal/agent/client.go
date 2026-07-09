@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,4 +105,63 @@ func (c *Client) Action(ctx context.Context, unit, action string) error {
 // DaemonReload re-runs the scope's Quadlet generator.
 func (c *Client) DaemonReload(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, api.PathDaemonReload, nil)
+}
+
+// raw performs a request whose body/response are plain bytes (unit files,
+// logs) rather than JSON.
+func (c *Client) raw(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, r)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set(api.HeaderAuth, "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("agent %s %s: %s: %s", method, path, resp.Status, bytes.TrimSpace(b))
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// UnitFile returns the raw Quadlet file contents for a unit.
+func (c *Client) UnitFile(ctx context.Context, name string) ([]byte, error) {
+	return c.raw(ctx, http.MethodGet, api.UnitFileURL(name), nil)
+}
+
+// WriteUnitFile writes a unit's contents and triggers a daemon-reload on the
+// agent side.
+func (c *Client) WriteUnitFile(ctx context.Context, name string, data []byte) error {
+	_, err := c.raw(ctx, http.MethodPut, api.UnitFileURL(name), data)
+	return err
+}
+
+// DeleteUnitFile removes a unit file and daemon-reloads on the agent side.
+func (c *Client) DeleteUnitFile(ctx context.Context, name string) error {
+	_, err := c.raw(ctx, http.MethodDelete, api.UnitFileURL(name), nil)
+	return err
+}
+
+// Logs returns the journal tail for a unit.
+func (c *Client) Logs(ctx context.Context, name string, lines int, since string) (string, error) {
+	q := url.Values{}
+	if lines > 0 {
+		q.Set("lines", strconv.Itoa(lines))
+	}
+	if since != "" {
+		q.Set("since", since)
+	}
+	path := api.UnitLogsURL(name)
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	b, err := c.raw(ctx, http.MethodGet, path, nil)
+	return string(b), err
 }
