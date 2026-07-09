@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/podman"
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/podman"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 // fakeSecretsPodman satisfies Podman plus the optional secrets/images

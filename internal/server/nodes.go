@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tobagin/rookery/internal/appdb"
-	"github.com/tobagin/rookery/internal/hostinfo"
-	"github.com/tobagin/rookery/internal/quadlet"
-	"github.com/tobagin/rookery/internal/rhost"
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/hostinfo"
+	"github.com/rookerylabs/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 type NodeScope struct {
@@ -72,11 +72,16 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 			nodes = append(nodes, NodeInventory{ID: id, Address: area.Scope.SSH, Local: !area.Remote()})
 			i = len(nodes) - 1
 			index[id] = i
-			if area.Remote() {
+			switch {
+			case area.Remote():
 				if m, err := rhost.Metrics(r.Context(), area.Scope.SSH); err == nil {
 					nodes[i].Metrics = &m
 				}
-			} else {
+			case area.ViaAgent():
+				// Agent nodes may be on another host; host metrics aren't
+				// exposed over the agent API yet, so leave them nil rather
+				// than report the wrong machine's numbers.
+			default:
 				m := hostinfo.Read()
 				nodes[i].Metrics = &m
 			}
@@ -93,6 +98,34 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 		}
 		node.Scopes = append(node.Scopes, NodeScope{Label: area.Label, User: area.Scope.User, System: area.Scope.IsSystem(), Kind: scopeKind})
 		node.UnitDirs = append(node.UnitDirs, area.Dirs...)
+
+		// Agent-backed areas return units with status already attached in one
+		// call — no separate discover + systemctl show. Count straight from it.
+		if area.ViaAgent() {
+			units, err := area.Agent.Units(r.Context())
+			if err != nil {
+				node.Errors = append(node.Errors, area.Label+": "+err.Error())
+				continue
+			}
+			node.Units += len(units)
+			counts.Units += len(units)
+			for _, u := range units {
+				switch u.Status.Active {
+				case "active":
+					node.Running++
+					counts.Running++
+				case "failed":
+					node.Failed++
+					counts.Failed++
+				default:
+					if u.Status.Load == "unknown" {
+						node.Unknown++
+						counts.Unknown++
+					}
+				}
+			}
+			continue
+		}
 
 		found, err := discoverArea(r.Context(), area)
 		if err != nil {

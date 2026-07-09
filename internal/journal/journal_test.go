@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 func TestCommandSystem(t *testing.T) {

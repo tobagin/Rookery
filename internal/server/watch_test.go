@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 func TestPollFailuresTransitions(t *testing.T) {

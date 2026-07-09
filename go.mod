@@ -1,8 +1,11 @@
-module github.com/tobagin/rookery
+module github.com/rookerylabs/rookery
 
 go 1.25.0
 
-require modernc.org/sqlite v1.53.0
+require (
+	github.com/rookerylabs/rookery-agent-api v0.1.0
+	modernc.org/sqlite v1.53.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

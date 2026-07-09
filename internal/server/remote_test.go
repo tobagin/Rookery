@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/gpu"
-	"github.com/tobagin/rookery/internal/rhost/rhosttest"
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/gpu"
+	"github.com/rookerylabs/rookery/internal/rhost/rhosttest"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 // newRemoteServer builds a server whose only area lives on a "remote" host

@@ -11,16 +11,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tobagin/rookery/internal/gitstore"
-	"github.com/tobagin/rookery/internal/gpu"
-	"github.com/tobagin/rookery/internal/oidc"
-	"github.com/tobagin/rookery/internal/podman"
-	"github.com/tobagin/rookery/internal/quadlet"
-	"github.com/tobagin/rookery/internal/registry"
-	"github.com/tobagin/rookery/internal/rhost"
-	"github.com/tobagin/rookery/internal/systemd"
-	"github.com/tobagin/rookery/internal/userstore"
-	"github.com/tobagin/rookery/web"
+	"github.com/rookerylabs/rookery/internal/agent"
+	"github.com/rookerylabs/rookery/internal/gitstore"
+	"github.com/rookerylabs/rookery/internal/gpu"
+	"github.com/rookerylabs/rookery/internal/oidc"
+	"github.com/rookerylabs/rookery/internal/podman"
+	"github.com/rookerylabs/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/registry"
+	"github.com/rookerylabs/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/userstore"
+	"github.com/rookerylabs/rookery/web"
 )
 
 // Systemd is the slice of systemd.Manager the handlers use; tests provide
@@ -68,11 +69,19 @@ type Area struct {
 	// Git, when set, records every save/delete in the primary dir's
 	// repository and serves history/rollback. Local areas only.
 	Git *gitstore.Store
+	// Agent, when set, reaches this area through a rookery-agent over HTTP
+	// instead of local systemctl or ssh. The agent runs inside the target
+	// scope, so no privilege crossing is needed. Mutually exclusive with a
+	// remote (ssh) scope.
+	Agent *agent.Client
 }
 
 // Remote reports whether this area's files and systemd live on another
 // host, reached over ssh (Scope.SSH carries the target).
 func (a Area) Remote() bool { return a.Scope.IsRemote() }
+
+// ViaAgent reports whether this area is reached through a rookery-agent.
+func (a Area) ViaAgent() bool { return a.Agent != nil }
 
 // Options configures a Server; zero-value fields get safe defaults.
 type Options struct {

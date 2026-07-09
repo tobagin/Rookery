@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tobagin/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/appdb"
 )
 
 const (

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tobagin/rookery/internal/oidc"
-	"github.com/tobagin/rookery/internal/systemd"
-	"github.com/tobagin/rookery/internal/userstore"
+	"github.com/rookerylabs/rookery/internal/oidc"
+	"github.com/rookerylabs/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/userstore"
 )
 
 func timeNowPlusShareTTL() time.Time { return time.Now().Add(shareTTL) }

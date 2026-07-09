@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tobagin/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/rhost"
 )
 
 // ErrNotRepo reports a directory that isn't under git (and creation wasn't

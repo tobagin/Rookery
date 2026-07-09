@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	. "github.com/tobagin/rookery/internal/rhost"
-	"github.com/tobagin/rookery/internal/rhost/rhosttest"
+	. "github.com/rookerylabs/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/rhost/rhosttest"
 )
 
 func InstallShim(t *testing.T) { rhosttest.InstallShim(t) }

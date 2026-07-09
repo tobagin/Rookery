@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tobagin/rookery/internal/quadlet"
-	"github.com/tobagin/rookery/internal/registry"
+	"github.com/rookerylabs/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/registry"
 )
 
 // updateRow is one unit's drift-check result.

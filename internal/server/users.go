@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/tobagin/rookery/internal/userstore"
+	"github.com/rookerylabs/rookery/internal/userstore"
 )
 
 // usersAvailable gates account management: it needs a store on disk, and

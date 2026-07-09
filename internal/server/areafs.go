@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/tobagin/rookery/internal/quadlet"
-	"github.com/tobagin/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/rhost"
 )
 
 // This file is the one place that knows whether an area's unit files live

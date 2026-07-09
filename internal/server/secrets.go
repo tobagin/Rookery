@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/tobagin/rookery/internal/podman"
-	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/podman"
+	"github.com/rookerylabs/rookery/internal/quadlet"
 )
 
 // secretsAPI is the optional slice of the Podman client the secrets page

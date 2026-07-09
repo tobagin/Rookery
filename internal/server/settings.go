@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tobagin/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/appdb"
 )
 
 type SettingItem struct {

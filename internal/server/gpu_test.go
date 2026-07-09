@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/gpu"
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/gpu"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 func TestGPUEndpointAndUnitRefs(t *testing.T) {

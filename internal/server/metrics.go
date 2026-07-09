@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/quadlet"
 )
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {

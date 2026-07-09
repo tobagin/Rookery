@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/userstore"
+	"github.com/rookerylabs/rookery/internal/userstore"
 )
 
 func TestDiscoverQuadletUsers(t *testing.T) {
