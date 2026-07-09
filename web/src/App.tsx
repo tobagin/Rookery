@@ -252,6 +252,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   const api = useApi();
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [newUnitOpen, setNewUnitOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("rookery-sidebar") === "collapsed");
   const nav = navItems(auth.readOnly);
 
@@ -310,7 +311,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
           </div>
           <div className="top-actions">
             <ThemeSwitch theme={theme} setTheme={setTheme} />
-            {!auth.readOnly && <Link className="btn btn-accent" to="/new"><Plus size={16} /> New unit</Link>}
+            {!auth.readOnly && <button className="btn btn-accent" onClick={() => setNewUnitOpen(true)}><Plus size={16} /> New unit</button>}
             {!auth.readOnly && auth.required && auth.authenticated && <button className="btn btn-ghost" onClick={copyShare}><Github size={16} /> Share</button>}
             <button className="btn icon-only mobile-more" onClick={() => setMoreOpen((v) => !v)} aria-label="More"><Menu size={18} /></button>
           </div>
@@ -326,6 +327,11 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
       <nav className="bottom-nav">
         {nav.slice(0, 5).map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} compact />)}
       </nav>
+      {newUnitOpen && (
+        <Overlay title="New unit" onClose={() => setNewUnitOpen(false)}>
+          <NewUnitForm onCreated={() => setNewUnitOpen(false)} />
+        </Overlay>
+      )}
     </div>
   );
 }
@@ -1164,11 +1170,12 @@ function PoliciesView() {
   const critical = active.filter((f) => f.severity === "critical").length;
   const warn = active.filter((f) => f.severity === "warn").length;
   const waived = findings.length - active.length;
+  const countSource = visibility === "active" ? active : visibility === "waived" ? findings.filter((f) => f.waived) : findings;
   const severityCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: findings.length, critical: 0, warn: 0, info: 0 };
-    findings.forEach((f) => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+    const counts: Record<string, number> = { all: countSource.length, critical: 0, warn: 0, info: 0 };
+    countSource.forEach((f) => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
     return counts;
-  }, [findings]);
+  }, [countSource]);
   const filtered = findings.filter((finding) => {
     if (severity !== "all" && finding.severity !== severity) return false;
     if (visibility === "active" && finding.waived) return false;
@@ -1178,10 +1185,10 @@ function PoliciesView() {
   return (
     <Page title="Policy" kicker="Fleet checks">
       <div className="tiles">
-        <MetricTile label="active findings" value={active.length} tone={active.length ? "warn" : "dim"} />
-        <MetricTile label="critical" value={critical} tone={critical ? "bad" : "dim"} />
-        <MetricTile label="warnings" value={warn} tone={warn ? "warn" : "dim"} />
-        <MetricTile label="waived" value={waived} tone="dim" />
+        <MetricTile label="active findings" value={active.length} tone={active.length ? "warn" : "dim"} active={visibility === "active" && severity === "all"} onClick={() => { setVisibility("active"); setSeverity("all"); }} />
+        <MetricTile label="critical" value={critical} tone={critical ? "bad" : "dim"} active={visibility === "active" && severity === "critical"} onClick={() => { setVisibility("active"); setSeverity("critical"); }} />
+        <MetricTile label="warnings" value={warn} tone={warn ? "warn" : "dim"} active={visibility === "active" && severity === "warn"} onClick={() => { setVisibility("active"); setSeverity("warn"); }} />
+        <MetricTile label="waived" value={waived} tone="dim" active={visibility === "waived"} onClick={() => { setVisibility("waived"); setSeverity("all"); }} />
       </div>
       <Panel title="Findings" icon={Shield}>
         <div className="filterbar">
@@ -1239,6 +1246,16 @@ function PolicyRow({ finding, editable, onChanged }: { finding: PolicyFinding; e
 }
 
 function NewUnit() {
+  return (
+    <Page title="New unit" kicker="Create a Quadlet from a starter template" back={<BackButton />}>
+      <Panel title="Definition" icon={Plus}>
+        <NewUnitForm />
+      </Panel>
+    </Page>
+  );
+}
+
+function NewUnitForm({ onCreated }: { onCreated?: () => void }) {
   const api = useApi();
   const { toast } = useApiContext();
   const navigate = useNavigate();
@@ -1276,6 +1293,7 @@ function NewUnit() {
         return;
       }
       toast(`created ${name}`);
+      onCreated?.();
       navigate(`/unit/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`);
     } catch (e) {
       toast((e as Error).message, true);
@@ -1283,18 +1301,16 @@ function NewUnit() {
   }
 
   return (
-    <Page title="New unit" kicker="Create a Quadlet from a starter template" back={<BackButton />}>
-      <Panel title="Definition" icon={Plus}>
-        <div className="filterbar">
-          <input className="input" placeholder="name, e.g. nginx-edge" value={baseName} onChange={(e) => setBaseName(e.target.value)} />
-          <select className="input" value={kind} onChange={(e) => changeKind(e.target.value)}>{Object.keys(TEMPLATES).map((k) => <option key={k}>{k}</option>)}</select>
-          <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
-        </div>
-        <textarea className="code-editor" value={content} spellCheck={false} onChange={(e) => setContent(e.target.value)} />
-        <button className="btn btn-accent" onClick={create}><Check size={16} /> Validate + create</button>
-        {validation && <ValidationBlock validation={validation.validation} hints={validation.hints || []} />}
-      </Panel>
-    </Page>
+    <>
+      <div className="filterbar">
+        <input className="input" placeholder="name, e.g. nginx-edge" value={baseName} onChange={(e) => setBaseName(e.target.value)} />
+        <select className="input" value={kind} onChange={(e) => changeKind(e.target.value)}>{Object.keys(TEMPLATES).map((k) => <option key={k}>{k}</option>)}</select>
+        <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
+      </div>
+      <textarea className="code-editor" value={content} spellCheck={false} onChange={(e) => setContent(e.target.value)} />
+      <button className="btn btn-accent" onClick={create}><Check size={16} /> Validate + create</button>
+      {validation && <ValidationBlock validation={validation.validation} hints={validation.hints || []} />}
+    </>
   );
 }
 
@@ -1437,6 +1453,7 @@ function UpdatesView() {
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const [summary, setSummary] = useState("");
   const [stale, setStale] = useState<{ count: number; bytes: number } | null>(null);
+  const [operation, setOperation] = useState<{ title: string; lines: string[] } | null>(null);
   const [q, setQ] = useState("");
   const [scope, setScope] = useState("all");
   const [status, setStatus] = useState("all");
@@ -1453,28 +1470,42 @@ function UpdatesView() {
     return !needle || `${row.name} ${row.image || ""} ${row.note || ""} ${row.scope}`.toLowerCase().includes(needle);
   });
 
-  async function check() {
+  async function refreshStaleImages() {
+    const staleResp = await api<{ count: number; bytes: number }>("/api/images/stale").catch(() => null);
+    setStale(staleResp?.body || null);
+  }
+
+  async function check(showOverlay = true) {
     try {
+      if (showOverlay) setOperation({ title: "Checking image updates", lines: ["Scanning managed container units", "Comparing registry digests with host image stores"] });
       const { body } = await api<{ updates?: UpdateInfo[]; skippedScopes?: string[] }>("/api/updates");
       const rows = body.updates || [];
       setUpdates(rows);
       const checked = rows.filter((r) => !r.note).length;
       const count = rows.filter((r) => r.updateAvailable).length;
-      setSummary(count ? `${count} updates available (${checked} tags checked)` : `all ${checked} checked tags up to date`);
-      const staleResp = await api<{ count: number; bytes: number }>("/api/images/stale").catch(() => null);
-      setStale(staleResp?.body || null);
+      const skipped = body.skippedScopes?.length ? `; skipped ${body.skippedScopes.join(", ")}` : "";
+      setSummary(count ? `${count} updates available (${checked} tags checked${skipped})` : `all ${checked} checked tags up to date${skipped}`);
+      if (showOverlay) setOperation({ title: "Checking image updates", lines: [`Checked ${checked} tags`, "Refreshing stale image totals"] });
+      await refreshStaleImages();
     } catch (e) {
       toast((e as Error).message, true);
+    } finally {
+      if (showOverlay) setOperation(null);
     }
   }
 
   async function prune() {
     try {
+      setOperation({ title: "Pruning stale images", lines: [`Removing ${stale?.count || 0} stale images`, "Podman is reclaiming unused layers"] });
       const { body } = await api<{ reclaimedBytes?: number }>("/api/images/prune", { method: "POST", body: "{}" });
       toast(`pruned; reclaimed ${fmtBytes(body.reclaimedBytes || 0)}`);
-      check();
+      setOperation({ title: "Pruning stale images", lines: [`Reclaimed ${fmtBytes(body.reclaimedBytes || 0)}`, "Refreshing image update state"] });
+      await refreshStaleImages();
+      await check();
     } catch (e) {
       toast((e as Error).message, true);
+    } finally {
+      setOperation(null);
     }
   }
 
@@ -1482,15 +1513,16 @@ function UpdatesView() {
 
   return (
     <Page title="Updates" kicker="Registry drift and stale image cleanup">
+      {operation && <OperationOverlay title={operation.title} lines={operation.lines} />}
       <div className="tiles">
         <MetricTile label="updates available" value={available.length} tone={available.length ? "warn" : "dim"} />
         <MetricTile label="current" value={current.length} tone={current.length ? "ok" : "dim"} />
         <MetricTile label="skipped / errors" value={noted.length} tone={noted.length ? "warn" : "dim"} />
         <MetricTile label="stale images" value={stale?.count || 0} tone={stale?.count ? "warn" : "dim"} />
       </div>
-      <div className="action-row"><button className="btn btn-accent" onClick={check}><RefreshCw size={16} /> Check image updates</button>{summary && <span className="muted">{summary}</span>}{stale?.count ? <button className="btn" onClick={prune}><Trash2 size={16} /> Prune {stale.count} stale ({fmtBytes(stale.bytes)})</button> : null}</div>
+      <div className="action-row"><button className="btn btn-accent" disabled={!!operation} onClick={() => check()}><RefreshCw size={16} /> Check image updates</button>{summary && <span className="muted">{summary}</span>}{stale?.count ? <button className="btn" disabled={!!operation} onClick={prune}><Trash2 size={16} /> Prune {stale.count} stale ({fmtBytes(stale.bytes)})</button> : null}</div>
       <Panel title="Available updates" icon={Download}>
-        {available.length ? available.map((row) => <UpdateRow key={`${row.scope}/${row.name}`} row={row} after={check} />) : <p className="muted">No image updates currently flagged.</p>}
+        {available.length ? available.map((row) => <UpdateRow key={`${row.scope}/${row.name}`} row={row} after={() => check(false)} busy={!!operation} />) : <p className="muted">No image updates currently flagged.</p>}
       </Panel>
       <Panel title="Checked units" icon={ListFilter}>
         <div className="filterbar">
@@ -1504,19 +1536,31 @@ function UpdatesView() {
   );
 }
 
-function UpdateRow({ row, after }: { row: UpdateInfo; after: () => void }) {
+function UpdateRow({ row, after, busy }: { row: UpdateInfo; after: () => Promise<void> | void; busy?: boolean }) {
   const api = useApi();
   const { toast } = useApiContext();
+  const [operation, setOperation] = useState<{ title: string; lines: string[] } | null>(null);
   async function update() {
     try {
-      await api(`/api/units/${encodeURIComponent(row.scope)}/${encodeURIComponent(row.name)}/update`, { method: "POST", body: "{}" });
+      setOperation({ title: `Updating ${row.name}`, lines: [`Pulling ${row.image}`, `Restarting ${row.scope}/${row.name}`] });
+      const { body } = await api<{ pulled?: string; warnings?: string[] }>(`/api/units/${encodeURIComponent(row.scope)}/${encodeURIComponent(row.name)}/update`, { method: "POST", body: "{}" });
       toast(`pulled and restarted ${row.name}`);
-      after();
+      const warnings = body.warnings || [];
+      setOperation({ title: `Updating ${row.name}`, lines: [`Pulled ${body.pulled || row.image}`, warnings.length ? warnings.join("; ") : "Refreshing update state"] });
+      await after();
     } catch (e) {
       toast((e as Error).message, true);
+    } finally {
+      setOperation(null);
     }
   }
-  return <div className="history-row"><span className="grow"><Link to={`/unit/${encodeURIComponent(row.scope)}/${encodeURIComponent(row.name)}`}>{row.name}</Link><span className="muted"> {row.image}</span></span><button className="btn btn-accent" onClick={update}><Download size={16} /> Pull + restart</button></div>;
+  return (
+    <div className="history-row">
+      {operation && <OperationOverlay title={operation.title} lines={operation.lines} />}
+      <span className="grow"><Link to={`/unit/${encodeURIComponent(row.scope)}/${encodeURIComponent(row.name)}`}>{row.name}</Link><span className="muted"> {row.image}</span></span>
+      <button className="btn btn-accent" disabled={busy || !!operation} onClick={update}><Download size={16} /> Pull + restart</button>
+    </div>
+  );
 }
 
 function GPUsView() {
@@ -1934,8 +1978,32 @@ function Panel({ title, icon: Icon, action, children }: { title: string; icon: R
   return <section className="panel"><div className="panel-head"><h2><Icon size={16} /> {title}</h2>{action}</div>{children}</section>;
 }
 
-function MetricTile({ label, value, tone, meter }: { label: string; value: React.ReactNode; tone?: "ok" | "bad" | "warn" | "dim"; meter?: number }) {
-  return <div className={`tile ${tone ? `tile-${tone}` : ""}`}><div className="tile-value">{value}</div><div className="tile-label">{label}</div>{meter != null && <div className="meter"><span style={{ width: `${Math.max(0, Math.min(100, meter))}%` }} /></div>}</div>;
+function Overlay({ title, onClose, children }: { title: string; onClose?: () => void; children: React.ReactNode }) {
+  return (
+    <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="overlay-panel">
+        <div className="overlay-head"><h2>{title}</h2>{onClose && <button className="btn icon-only" onClick={onClose} aria-label="Close"><X size={16} /></button>}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function OperationOverlay({ title, lines }: { title: string; lines: string[] }) {
+  return (
+    <Overlay title={title}>
+      <div className="operation-body">
+        <RefreshCw className="spin" size={20} />
+        <div>{lines.map((line) => <div key={line}>{line}</div>)}</div>
+      </div>
+    </Overlay>
+  );
+}
+
+function MetricTile({ label, value, tone, meter, onClick, active }: { label: string; value: React.ReactNode; tone?: "ok" | "bad" | "warn" | "dim"; meter?: number; onClick?: () => void; active?: boolean }) {
+  const cls = `tile ${tone ? `tile-${tone}` : ""} ${onClick ? "tile-action" : ""} ${active ? "active" : ""}`;
+  const content = <><div className="tile-value">{value}</div><div className="tile-label">{label}</div>{meter != null && <div className="meter"><span style={{ width: `${Math.max(0, Math.min(100, meter))}%` }} /></div>}</>;
+  return onClick ? <button className={cls} onClick={onClick}>{content}</button> : <div className={cls}>{content}</div>;
 }
 
 function Meter({ label, pct, text }: { label: string; pct: number; text: string }) {
