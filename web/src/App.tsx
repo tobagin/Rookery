@@ -1155,6 +1155,7 @@ function PoliciesView() {
   const [loading, setLoading] = useState(true);
   const [severity, setSeverity] = useState("all");
   const [visibility, setVisibility] = useState<"active" | "all" | "waived">("active");
+  const policySeverities = ["all", "critical", "warn", "info"];
   const load = useCallback(async () => {
     try {
       const { body } = await api<{ findings?: PolicyFinding[] }>("/api/policies");
@@ -1166,22 +1167,21 @@ function PoliciesView() {
     }
   }, [api, toast]);
   useEffect(() => { load(); }, [load]);
+  const severityOf = (finding: PolicyFinding) => finding.severity.trim().toLowerCase();
   const active = findings.filter((f) => !f.waived);
-  const critical = active.filter((f) => f.severity === "critical").length;
-  const warn = active.filter((f) => f.severity === "warn").length;
+  const critical = active.filter((f) => severityOf(f) === "critical").length;
+  const warn = active.filter((f) => severityOf(f) === "warn").length;
   const waived = findings.length - active.length;
   const countSource = visibility === "active" ? active : visibility === "waived" ? findings.filter((f) => f.waived) : findings;
   const severityCounts = useMemo(() => {
     const counts: Record<string, number> = { all: countSource.length, critical: 0, warn: 0, info: 0 };
-    countSource.forEach((f) => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+    countSource.forEach((f) => {
+      const sev = severityOf(f);
+      counts[sev] = (counts[sev] || 0) + 1;
+    });
     return counts;
   }, [countSource]);
-  const filtered = findings.filter((finding) => {
-    if (severity !== "all" && finding.severity !== severity) return false;
-    if (visibility === "active" && finding.waived) return false;
-    if (visibility === "waived" && !finding.waived) return false;
-    return true;
-  });
+  const filtered = countSource.filter((finding) => severity === "all" || severityOf(finding) === severity);
   return (
     <Page title="Policy" kicker="Fleet checks">
       <div className="tiles">
@@ -1190,13 +1190,13 @@ function PoliciesView() {
         <MetricTile label="warnings" value={warn} tone={warn ? "warn" : "dim"} active={visibility === "active" && severity === "warn"} onClick={() => { setVisibility("active"); setSeverity("warn"); }} />
         <MetricTile label="waived" value={waived} tone="dim" active={visibility === "waived"} onClick={() => { setVisibility("waived"); setSeverity("all"); }} />
       </div>
-      <Panel title="Findings" icon={Shield}>
+      <Panel title={`Findings (${filtered.length}/${countSource.length})`} icon={Shield}>
         <div className="filterbar">
           <div className="segmented text-segmented" aria-label="Policy severity filter">
-            {["all", "critical", "warn", "info"].map((s) => <button key={s} className={severity === s ? "active" : ""} onClick={() => setSeverity(s)}>{s} <span>{severityCounts[s] || 0}</span></button>)}
+            {policySeverities.map((s) => <button type="button" key={s} className={severity === s ? "active" : ""} onClick={() => setSeverity(s)}>{s} <span>{severityCounts[s] || 0}</span></button>)}
           </div>
           <div className="segmented text-segmented" aria-label="Policy waiver filter">
-            {(["active", "all", "waived"] as const).map((s) => <button key={s} className={visibility === s ? "active" : ""} onClick={() => setVisibility(s)}>{s}</button>)}
+            {(["active", "all", "waived"] as const).map((s) => <button type="button" key={s} className={visibility === s ? "active" : ""} onClick={() => setVisibility(s)}>{s}</button>)}
           </div>
         </div>
         {loading ? <p className="muted">Scanning Quadlet files...</p> : filtered.length ? filtered.map((finding) => <PolicyRow key={finding.key} finding={finding} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <EmptyState title="No matching findings" text="Adjust the policy filters or clear waivers." />}
@@ -2003,7 +2003,7 @@ function OperationOverlay({ title, lines }: { title: string; lines: string[] }) 
 function MetricTile({ label, value, tone, meter, onClick, active }: { label: string; value: React.ReactNode; tone?: "ok" | "bad" | "warn" | "dim"; meter?: number; onClick?: () => void; active?: boolean }) {
   const cls = `tile ${tone ? `tile-${tone}` : ""} ${onClick ? "tile-action" : ""} ${active ? "active" : ""}`;
   const content = <><div className="tile-value">{value}</div><div className="tile-label">{label}</div>{meter != null && <div className="meter"><span style={{ width: `${Math.max(0, Math.min(100, meter))}%` }} /></div>}</>;
-  return onClick ? <button className={cls} onClick={onClick}>{content}</button> : <div className={cls}>{content}</div>;
+  return onClick ? <button type="button" className={cls} onClick={onClick}>{content}</button> : <div className={cls}>{content}</div>;
 }
 
 function Meter({ label, pct, text }: { label: string; pct: number; text: string }) {
