@@ -108,6 +108,11 @@ func sessionHash(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func bearerHash(token string) string {
+	sum := sha256.Sum256([]byte("rookery-api-token:" + token))
+	return hex.EncodeToString(sum[:])
+}
+
 func (s *sessions) create(user, role string) string {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -220,6 +225,19 @@ func (s *Server) authRequired(r *http.Request) bool {
 
 // session returns the request's live session, if any.
 func (s *Server) session(r *http.Request) (*session, bool) {
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && s.users != nil {
+		raw := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		tok, ok, err := appdb.GetAPIToken(s.users.DB(), bearerHash(raw))
+		if err == nil && ok {
+			if tok.ExpiresAt != "" {
+				if exp, err := time.Parse(time.RFC3339Nano, tok.ExpiresAt); err == nil && time.Now().After(exp) {
+					return nil, false
+				}
+			}
+			_ = appdb.TouchAPIToken(s.users.DB(), tok.IDHash)
+			return &session{user: "token:" + tok.Name, role: tok.Role, expiry: time.Now().Add(s.sess.ttl)}, true
+		}
+	}
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
 		return nil, false
@@ -241,6 +259,7 @@ func readOnlyAllowed(r *http.Request) bool {
 	// No secrets metadata and no account list for read-only principals.
 	return !strings.HasPrefix(r.URL.Path, "/api/secrets") &&
 		!strings.HasPrefix(r.URL.Path, "/api/users") &&
+		!strings.HasPrefix(r.URL.Path, "/api/tokens") &&
 		!strings.HasPrefix(r.URL.Path, "/api/settings") &&
 		!strings.HasPrefix(r.URL.Path, "/api/audit") &&
 		!strings.HasPrefix(r.URL.Path, "/api/backup")

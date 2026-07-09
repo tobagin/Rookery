@@ -7,9 +7,11 @@ package registry
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -82,25 +84,32 @@ func NewClient() *Client {
 // ResolveDigest returns the manifest digest the registry currently serves
 // for the image's tag.
 func (c *Client) ResolveDigest(ctx context.Context, image string) (string, error) {
+	return c.ResolveDigestWithBasic(ctx, image, "", "")
+}
+
+func (c *Client) ResolveDigestWithBasic(ctx context.Context, image, username, password string) (string, error) {
 	ref, err := ParseRef(image)
 	if err != nil {
 		return "", err
 	}
 	url := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", ref.scheme(), ref.Host, ref.Repo, ref.Tag)
 
-	digest, status, challenge, err := c.headManifest(ctx, url, "")
+	digest, status, challenge, err := c.headManifest(ctx, url, "", username, password)
 	if err != nil {
 		return "", err
 	}
 	if status == http.StatusUnauthorized && challenge != "" {
-		token, err := c.fetchToken(ctx, challenge, ref.Repo)
+		token, err := c.fetchToken(ctx, challenge, ref.Repo, username, password)
 		if err != nil {
 			return "", err
 		}
-		digest, status, _, err = c.headManifest(ctx, url, token)
+		digest, status, _, err = c.headManifest(ctx, url, token, "", "")
 		if err != nil {
 			return "", err
 		}
+	}
+	if status == http.StatusUnauthorized && username != "" {
+		return "", fmt.Errorf("auth failed for %s", ref.Host)
 	}
 	if status != http.StatusOK {
 		return "", fmt.Errorf("registry %s: status %d for %s/%s:%s", ref.Host, status, ref.Host, ref.Repo, ref.Tag)
@@ -111,7 +120,7 @@ func (c *Client) ResolveDigest(ctx context.Context, image string) (string, error
 	return digest, nil
 }
 
-func (c *Client) headManifest(ctx context.Context, url, token string) (digest string, status int, challenge string, err error) {
+func (c *Client) headManifest(ctx context.Context, url, token, username, password string) (digest string, status int, challenge string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return "", 0, "", err
@@ -119,6 +128,8 @@ func (c *Client) headManifest(ctx context.Context, url, token string) (digest st
 	req.Header.Set("Accept", acceptManifests)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	} else if username != "" {
+		req.SetBasicAuth(username, password)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -130,7 +141,7 @@ func (c *Client) headManifest(ctx context.Context, url, token string) (digest st
 
 // fetchToken performs the anonymous bearer-token dance described by the
 // WWW-Authenticate challenge.
-func (c *Client) fetchToken(ctx context.Context, challenge, repo string) (string, error) {
+func (c *Client) fetchToken(ctx context.Context, challenge, repo, username, password string) (string, error) {
 	params := parseChallenge(challenge)
 	realm := params["realm"]
 	if realm == "" {
@@ -143,6 +154,9 @@ func (c *Client) fetchToken(ctx context.Context, challenge, repo string) (string
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
+	}
+	if username != "" {
+		req.SetBasicAuth(username, password)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -163,6 +177,45 @@ func (c *Client) fetchToken(ctx context.Context, challenge, repo string) (string
 		return body.Token, nil
 	}
 	return body.AccessToken, nil
+}
+
+func BasicFromAuthFiles(host string, paths []string) (string, string, bool) {
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var raw struct {
+			Auths map[string]struct {
+				Auth     string `json:"auth"`
+				Username string `json:"username"`
+				Password string `json:"password"`
+			} `json:"auths"`
+		}
+		if json.Unmarshal(data, &raw) != nil {
+			continue
+		}
+		for _, key := range []string{host, "https://" + host, "http://" + host} {
+			entry, ok := raw.Auths[key]
+			if !ok {
+				continue
+			}
+			if entry.Username != "" {
+				return entry.Username, entry.Password, true
+			}
+			if entry.Auth != "" {
+				decoded, err := base64.StdEncoding.DecodeString(entry.Auth)
+				if err != nil {
+					continue
+				}
+				user, pass, ok := strings.Cut(string(decoded), ":")
+				if ok {
+					return user, pass, true
+				}
+			}
+		}
+	}
+	return "", "", false
 }
 
 // parseChallenge reads `Bearer realm="...",service="..."` into a map.

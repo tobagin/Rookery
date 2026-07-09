@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/tobagin/rookery/internal/gitstore"
@@ -107,10 +108,12 @@ type Options struct {
 	RemoteDigests func(ctx context.Context, target string, userSession bool, image string) ([]string, error)
 	RemotePull    func(ctx context.Context, target string, userSession bool, image string) error
 	RemoteGPUs    func(ctx context.Context, target string) []gpu.Device
+	AlertTest     func(ctx context.Context) error
 }
 
 // Server routes API and UI requests.
 type Server struct {
+	areasMu       sync.RWMutex
 	areas         []Area
 	sysd          Systemd
 	validate      ValidateFunc
@@ -119,6 +122,7 @@ type Server struct {
 	remoteDigests func(ctx context.Context, target string, userSession bool, image string) ([]string, error)
 	remotePull    func(ctx context.Context, target string, userSession bool, image string) error
 	remoteGPUs    func(ctx context.Context, target string) []gpu.Device
+	alertTest     func(ctx context.Context) error
 	version       string
 	password      string
 	users         *userstore.Store
@@ -151,6 +155,7 @@ func New(opts Options) *Server {
 		remoteDigests: opts.RemoteDigests,
 		remotePull:    opts.RemotePull,
 		remoteGPUs:    opts.RemoteGPUs,
+		alertTest:     opts.AlertTest,
 		sess:          newSessions(opts.SessionTTL),
 		settings:      opts.Settings,
 		mux:           http.NewServeMux(),
@@ -186,6 +191,7 @@ func New(opts Options) *Server {
 		s.sess.useDB(s.users.DB())
 	}
 	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
+	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/onboarding", s.handleOnboarding)
 	s.mux.HandleFunc("POST /api/me/password", s.handleChangeMyPassword)
@@ -200,8 +206,12 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("PATCH /api/users/{name}", s.handlePatchUser)
 	s.mux.HandleFunc("DELETE /api/users/{name}", s.handleDeleteUser)
 	s.mux.HandleFunc("POST /api/users/{name}/password", s.handleSetUserPassword)
+	s.mux.HandleFunc("GET /api/tokens", s.handleListTokens)
+	s.mux.HandleFunc("POST /api/tokens", s.handleCreateToken)
+	s.mux.HandleFunc("DELETE /api/tokens/{name}", s.handleDeleteToken)
 	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	s.mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
+	s.mux.HandleFunc("POST /api/alerts/test", s.handleAlertTest)
 	s.mux.HandleFunc("GET /api/audit", s.handleAuditEvents)
 	s.mux.HandleFunc("GET /api/backup", s.handleBackup)
 	s.mux.HandleFunc("POST /api/restore", s.handleRestore)
@@ -283,12 +293,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) area(label string) (Area, bool) {
+	s.areasMu.RLock()
+	defer s.areasMu.RUnlock()
 	for _, a := range s.areas {
 		if a.Label == label {
 			return a, true
 		}
 	}
 	return Area{}, false
+}
+
+func (s *Server) areasSnapshot() []Area {
+	s.areasMu.RLock()
+	defer s.areasMu.RUnlock()
+	out := make([]Area, len(s.areas))
+	copy(out, s.areas)
+	return out
+}
+
+func (s *Server) SetAlertTest(fn func(ctx context.Context) error) {
+	s.alertTest = fn
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

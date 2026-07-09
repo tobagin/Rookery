@@ -22,7 +22,7 @@ type LicenseStatus struct {
 func (s *Server) licenseStatus() LicenseStatus {
 	seen := map[string]bool{}
 	nodes := []string{}
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		node := "local"
 		if area.Remote() {
 			node = area.Scope.SSH

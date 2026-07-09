@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/tobagin/rookery/internal/registry"
 )
 
 // updateRow is one unit's drift-check result.
@@ -33,7 +37,7 @@ func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 	var jobs []job
 	skippedScopes := []string{}
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		if !area.Remote() && s.pod == nil {
 			skippedScopes = append(skippedScopes, area.Label)
 			continue
@@ -57,7 +61,7 @@ func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
 			jobs = append(jobs, job{area: area, name: d.unit.Name, image: image})
 		}
 	}
-	if len(jobs) == 0 && len(skippedScopes) == len(s.areas) && s.pod == nil {
+	if len(jobs) == 0 && len(skippedScopes) == len(s.areasSnapshot()) && s.pod == nil {
 		httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
 		return
 	}
@@ -100,7 +104,7 @@ func (s *Server) checkDrift(ctx context.Context, area Area, name, image string) 
 		row.Note = "pinned by digest; cannot drift"
 		return row
 	}
-	remote, err := s.resolve(ctx, image)
+	remote, err := s.resolveForArea(ctx, area, image)
 	if err != nil {
 		row.Note = "registry: " + err.Error()
 		return row
@@ -119,6 +123,39 @@ func (s *Server) checkDrift(ctx context.Context, area Area, name, image string) 
 		}
 	}
 	return row
+}
+
+func (s *Server) resolveForArea(ctx context.Context, area Area, image string) (string, error) {
+	ref, err := registry.ParseRef(image)
+	if err != nil {
+		return "", err
+	}
+	if user, pass, ok := registry.BasicFromAuthFiles(ref.Host, authFilesForArea(area)); ok {
+		return registry.NewClient().ResolveDigestWithBasic(ctx, image, user, pass)
+	}
+	return s.resolve(ctx, image)
+}
+
+func authFilesForArea(area Area) []string {
+	var paths []string
+	if area.Remote() {
+		return paths
+	}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		paths = append(paths, filepath.Join(dir, "containers", "auth.json"))
+	}
+	home := ""
+	if area.Scope.User != "" {
+		if u, err := user.Lookup(area.Scope.User); err == nil {
+			home = u.HomeDir
+		}
+	} else if h, err := os.UserHomeDir(); err == nil {
+		home = h
+	}
+	if home != "" {
+		paths = append(paths, filepath.Join(home, ".config", "containers", "auth.json"))
+	}
+	return paths
 }
 
 // handleUpdateUnit is the one-click follow-through: pull the unit's image
@@ -260,7 +297,7 @@ func (s *Server) driftRows(ctx context.Context) []updateRow {
 		image string
 	}
 	var jobs []job
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		if !area.Remote() && s.pod == nil {
 			continue
 		}

@@ -59,7 +59,7 @@ type NodeGroup struct {
 func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 	index := map[string]int{}
 	var nodes []NodeInventory
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		id := "local"
 		if area.Remote() {
 			id = area.Scope.SSH
@@ -243,13 +243,17 @@ func (s *Server) handleAddNode(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	s.areasMu.Lock()
 	for _, existing := range s.areas {
 		if existing.Label == area.Label {
+			s.areasMu.Unlock()
 			httpError(w, http.StatusConflict, "node scope already exists")
 			return
 		}
 	}
-	s.areas = append(s.areas, area)
+	next := append(append([]Area{}, s.areas...), area)
+	s.areas = next
+	s.areasMu.Unlock()
 	if err := s.persistRuntimeRemotes(); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -268,7 +272,8 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	next := s.areas[:0]
+	s.areasMu.Lock()
+	next := make([]Area, 0, len(s.areas))
 	removed := false
 	for _, area := range s.areas {
 		nodeID := area.NodeID
@@ -282,10 +287,12 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		next = append(next, area)
 	}
 	if !removed {
+		s.areasMu.Unlock()
 		httpError(w, http.StatusNotFound, "unknown editable remote node")
 		return
 	}
 	s.areas = next
+	s.areasMu.Unlock()
 	if err := s.persistRuntimeRemotes(); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -340,7 +347,7 @@ func (s *Server) persistRuntimeRemotes() error {
 		return fmt.Errorf("no app database configured")
 	}
 	var entries []string
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		if !area.Remote() {
 			continue
 		}

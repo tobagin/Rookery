@@ -26,7 +26,7 @@ type PolicyFinding struct {
 
 func (s *Server) policyFindings(r *http.Request) []PolicyFinding {
 	var findings []PolicyFinding
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		node := "local"
 		if area.Remote() {
 			node = area.Scope.SSH

@@ -2,6 +2,7 @@ package server
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -113,6 +114,26 @@ func doJSON(t *testing.T, srv *Server, method, path string, body string) (*httpt
 	return rec, out
 }
 
+func doBytesAs(t *testing.T, srv *Server, cookie, method, path string, body []byte, contentType string) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if cookie != "" {
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+	}
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	out := map[string]any{}
+	if rec.Body.Len() > 0 && strings.Contains(rec.Header().Get("Content-Type"), "json") {
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("%s %s: invalid JSON response: %v\n%s", method, path, err, rec.Body.String())
+		}
+	}
+	return rec, out
+}
+
 func TestListUnits(t *testing.T) {
 	srv, _, _ := newTestServer(t, okValidator)
 	rec, body := doJSON(t, srv, "GET", "/api/units", "")
@@ -174,6 +195,20 @@ func TestListUnitsSystemdDown(t *testing.T) {
 	}
 	if errs := body["scopeErrors"].(map[string]any); !strings.Contains(errs["system"].(string), "on fire") {
 		t.Errorf("scopeErrors = %v", errs)
+	}
+}
+
+func TestMetricsEndpoint(t *testing.T) {
+	srv, _, _ := newTestServer(t, okValidator)
+	rec, _ := doJSON(t, srv, "GET", "/metrics", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"rookery_build_info", "rookery_units", "rookery_node_reachable"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, body)
+		}
 	}
 }
 
@@ -438,6 +473,134 @@ func TestBackupIncludesManifestAndQuadlets(t *testing.T) {
 	if !strings.Contains(seen["quadlets/system/jellyfin.container"], "Image=docker.io/jellyfin") {
 		t.Fatalf("quadlet missing from backup: keys=%v", seen)
 	}
+}
+
+func TestRestoreDryRunApplyAndTamperReject(t *testing.T) {
+	srv, _, dir := newTestServer(t, okValidator)
+	store, err := userstore.Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DB().Close() })
+	if err := store.Create("admin", "correct-password", userstore.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create("viewer", "viewer-password", userstore.RoleViewer); err != nil {
+		t.Fatal(err)
+	}
+	if err := appdb.PutSetting(store.DB(), "alerts", "ntfy://example/topic"); err != nil {
+		t.Fatal(err)
+	}
+	srv.users = store
+	srv.sess.useDB(store.DB())
+	cookie := loginCookie(t, srv, "admin", "correct-password")
+
+	req := httptest.NewRequest("GET", "/api/backup", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("backup: %d %s", rec.Code, rec.Body.String())
+	}
+	backup := rec.Body.Bytes()
+
+	if err := os.Remove(filepath.Join(dir, "jellyfin.container")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete("viewer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appdb.PutSetting(store.DB(), "alerts", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, body := doBytesAs(t, srv, cookie, "POST", "/api/restore?dryRun=1", backup, "application/gzip")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dry-run: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(body["changes"].([]any)) == 0 {
+		t.Fatalf("dry-run changes empty: %v", body)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "jellyfin.container")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run wrote unit file, stat err=%v", err)
+	}
+
+	rec, _ = doBytesAs(t, srv, cookie, "POST", "/api/restore", tamperBackup(t, backup), "application/gzip")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("tampered restore status %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
+	rec, _ = doBytesAs(t, srv, cookie, "POST", "/api/restore", backup, "application/gzip")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restore: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "jellyfin.container")); err != nil {
+		t.Fatalf("unit not restored: %v", err)
+	}
+	if _, ok := store.Get("viewer"); !ok {
+		t.Fatal("viewer account not restored")
+	}
+	settings, err := appdb.GetSettings(store.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundSetting := false
+	for _, s := range settings {
+		if s.Key == "alerts" && strings.Contains(string(s.Value), "ntfy://example/topic") {
+			foundSetting = true
+		}
+	}
+	if !foundSetting {
+		t.Fatalf("settings not restored: %#v", settings)
+	}
+}
+
+func tamperBackup(t *testing.T, data []byte) []byte {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gz)
+	files := map[string][]byte{}
+	modes := map[string]int64{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[h.Name] = body
+		modes[h.Name] = h.Mode
+	}
+	gz.Close()
+	for name := range files {
+		if strings.HasPrefix(name, "quadlets/") {
+			files[name] = append(files[name], []byte("\n# tampered\n")...)
+			break
+		}
+	}
+	var out bytes.Buffer
+	zw := gzip.NewWriter(&out)
+	tw := tar.NewWriter(zw)
+	for name, body := range files {
+		if err := writeTarFile(tw, name, body, modes[name]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
 }
 
 func TestPolicyFindings(t *testing.T) {

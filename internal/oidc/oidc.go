@@ -5,6 +5,8 @@ package oidc
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -98,6 +100,9 @@ type jwk struct {
 	Alg string   `json:"alg"`
 	N   string   `json:"n"`
 	E   string   `json:"e"`
+	Crv string   `json:"crv"`
+	X   string   `json:"x"`
+	Y   string   `json:"y"`
 	X5C []string `json:"x5c"`
 }
 
@@ -233,10 +238,10 @@ func (c *Client) VerifyIDToken(ctx context.Context, raw, nonce string) (Claims, 
 	if err := json.Unmarshal(headerJSON, &header); err != nil {
 		return Claims{}, fmt.Errorf("parse id_token header: %w", err)
 	}
-	if header.Alg != "RS256" {
+	if header.Alg != "RS256" && header.Alg != "ES256" {
 		return Claims{}, fmt.Errorf("unsupported id_token alg %q", header.Alg)
 	}
-	key, err := c.key(ctx, header.Kid)
+	key, err := c.key(ctx, header.Kid, header.Alg)
 	if err != nil {
 		return Claims{}, err
 	}
@@ -245,8 +250,17 @@ func (c *Client) VerifyIDToken(ctx context.Context, raw, nonce string) (Claims, 
 		return Claims{}, fmt.Errorf("decode id_token signature: %w", err)
 	}
 	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, sum[:], sig); err != nil {
-		return Claims{}, fmt.Errorf("verify id_token signature: %w", err)
+	switch k := key.(type) {
+	case *rsa.PublicKey:
+		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, sum[:], sig); err != nil {
+			return Claims{}, fmt.Errorf("verify id_token signature: %w", err)
+		}
+	case *ecdsa.PublicKey:
+		if len(sig) != 64 || !ecdsa.Verify(k, sum[:], new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])) {
+			return Claims{}, errors.New("verify id_token signature: ECDSA verification failed")
+		}
+	default:
+		return Claims{}, errors.New("unsupported id_token signing key")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
@@ -380,7 +394,7 @@ func (c *Client) discovery(ctx context.Context) (discovery, error) {
 	return d, nil
 }
 
-func (c *Client) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+func (c *Client) key(ctx context.Context, kid, alg string) (any, error) {
 	set, err := c.keys(ctx)
 	if err != nil {
 		return nil, err
@@ -389,10 +403,18 @@ func (c *Client) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 		if kid != "" && k.Kid != kid {
 			continue
 		}
-		if k.Kty != "RSA" || (k.Use != "" && k.Use != "sig") || (k.Alg != "" && k.Alg != "RS256") {
+		if k.Use != "" && k.Use != "sig" {
 			continue
 		}
-		return rsaKey(k)
+		if k.Alg != "" && k.Alg != alg {
+			continue
+		}
+		if alg == "RS256" && k.Kty == "RSA" {
+			return rsaKey(k)
+		}
+		if alg == "ES256" && k.Kty == "EC" {
+			return ecKey(k)
+		}
 	}
 	if kid != "" {
 		c.mu.Lock()
@@ -403,12 +425,15 @@ func (c *Client) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 			return nil, err
 		}
 		for _, k := range set.Keys {
-			if k.Kid == kid && k.Kty == "RSA" {
+			if k.Kid == kid && alg == "RS256" && k.Kty == "RSA" {
 				return rsaKey(k)
+			}
+			if k.Kid == kid && alg == "ES256" && k.Kty == "EC" {
+				return ecKey(k)
 			}
 		}
 	}
-	return nil, fmt.Errorf("no matching RSA signing key for kid %q", kid)
+	return nil, fmt.Errorf("no matching %s signing key for kid %q", alg, kid)
 }
 
 func (c *Client) keys(ctx context.Context) (jwks, error) {
@@ -478,6 +503,21 @@ func rsaKey(k jwk) (*rsa.PublicKey, error) {
 		return nil, errors.New("RSA exponent is zero")
 	}
 	return &rsa.PublicKey{N: new(big.Int).SetBytes(nb), E: e}, nil
+}
+
+func ecKey(k jwk) (*ecdsa.PublicKey, error) {
+	if k.Crv != "P-256" {
+		return nil, fmt.Errorf("unsupported EC curve %q", k.Crv)
+	}
+	xb, err := base64.RawURLEncoding.DecodeString(k.X)
+	if err != nil {
+		return nil, err
+	}
+	yb, err := base64.RawURLEncoding.DecodeString(k.Y)
+	if err != nil {
+		return nil, err
+	}
+	return &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(xb), Y: new(big.Int).SetBytes(yb)}, nil
 }
 
 func issuerEqual(a, b string) bool {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -308,6 +309,93 @@ func TestViewerRoleIsReadOnly(t *testing.T) {
 	}
 	if srv.shareValid(tokenBefore) {
 		t.Error("share token survived a password change")
+	}
+}
+
+func TestSelfServicePasswordChangeRevokesOtherSessionsAndShares(t *testing.T) {
+	srv, store := newUsersServer(t)
+	if err := store.Create("admin", "adminpass123", userstore.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create("viewer", "viewerpass1", userstore.RoleViewer); err != nil {
+		t.Fatal(err)
+	}
+	viewer1 := loginCookie(t, srv, "viewer", "viewerpass1")
+	viewer2 := loginCookie(t, srv, "viewer", "viewerpass1")
+	share := srv.mintShare(timeNowPlusShareTTL())
+
+	rec := doAs(t, srv, viewer1, "POST", "/api/me/password", `{"currentPassword":"wrong","newPassword":"newpass123"}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong current password: %d", rec.Code)
+	}
+	rec = doAs(t, srv, viewer1, "POST", "/api/me/password", `{"currentPassword":"viewerpass1","newPassword":"newpass123"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("password change: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := store.VerifyUser("viewer", "newpass123"); !ok {
+		t.Fatal("new password does not verify")
+	}
+	if rec := doAs(t, srv, viewer1, "GET", "/api/units", ""); rec.Code != http.StatusOK {
+		t.Fatalf("current session revoked: %d", rec.Code)
+	}
+	if rec := doAs(t, srv, viewer2, "GET", "/api/units", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("other session still accepted: %d", rec.Code)
+	}
+	req := httptest.NewRequest("GET", "/api/units", strings.NewReader(""))
+	req.AddCookie(&http.Cookie{Name: shareCookie, Value: share})
+	shareRec := httptest.NewRecorder()
+	srv.ServeHTTP(shareRec, req)
+	if shareRec.Code != http.StatusUnauthorized {
+		t.Fatalf("share survived password change: %d", shareRec.Code)
+	}
+}
+
+func TestSessionsPersistAcrossServerRestart(t *testing.T) {
+	store, err := userstore.Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DB().Close() })
+	if err := store.Create("admin", "adminpass123", userstore.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	areas := []Area{{Label: "system", Scope: systemd.Scope{}, Dirs: []string{t.TempDir()}}}
+	srv1 := New(Options{Areas: areas, Systemd: &fakeSystemd{}, Validate: okValidator, Users: store})
+	cookie := loginCookie(t, srv1, "admin", "adminpass123")
+	srv2 := New(Options{Areas: areas, Systemd: &fakeSystemd{}, Validate: okValidator, Users: store})
+	if rec := doAs(t, srv2, cookie, "GET", "/api/auth", ""); rec.Code != http.StatusOK {
+		t.Fatalf("persisted session rejected after restart: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPITokenBearerAuth(t *testing.T) {
+	srv, store := newUsersServer(t)
+	if err := store.Create("admin", "adminpass123", userstore.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	admin := loginCookie(t, srv, "admin", "adminpass123")
+	rec := doAs(t, srv, admin, "POST", "/api/tokens", `{"name":"ci","role":"viewer"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create token: %d %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	token := body["token"].(string)
+	req := httptest.NewRequest("GET", "/api/units", strings.NewReader(""))
+	req.Header.Set("Authorization", "Bearer "+token)
+	authRec := httptest.NewRecorder()
+	srv.ServeHTTP(authRec, req)
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("bearer GET units: %d %s", authRec.Code, authRec.Body.String())
+	}
+	req = httptest.NewRequest("POST", "/api/share", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+token)
+	authRec = httptest.NewRecorder()
+	srv.ServeHTTP(authRec, req)
+	if authRec.Code != http.StatusForbidden {
+		t.Fatalf("viewer token write: %d, want 403", authRec.Code)
 	}
 }
 

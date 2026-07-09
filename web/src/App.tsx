@@ -190,6 +190,20 @@ export function App() {
     localStorage.setItem("rookery-theme", theme);
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "/" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const el = ev.target as HTMLElement | null;
+      if (el && ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) return;
+      const input = document.querySelector<HTMLInputElement>(".searchbox input");
+      if (input) {
+        ev.preventDefault();
+        input.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   if (!loaded) return <Splash />;
   if (auth.setupNeeded && !sessionStorage.getItem("rookery-setup-skip")) {
@@ -726,16 +740,18 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
   const { units, scopeErrors, error, loading, reload } = useUnits(true);
   const { auth, toast } = useApiContext();
   const api = useApi();
-  const [q, setQ] = useState("");
-  const [kind, setKind] = useState("all");
-  const [scope, setScope] = useState("all");
-  const [status, setStatus] = useState<UnitState | "all">(failedOnly ? "failed" : "all");
+  const [params, setParams] = useSearchParams();
+  const [q, setQ] = useState(params.get("q") || "");
+  const [kind, setKind] = useState(params.get("kind") || "all");
+  const [scope, setScope] = useState(params.get("scope") || "all");
+  const [status, setStatus] = useState<UnitState | "all">((params.get("status") as UnitState | "all") || (failedOnly ? "failed" : "all"));
+  const [sort, setSort] = useState(params.get("sort") || "name");
   const [compact, setCompact] = useState(() => localStorage.getItem("rookery-units-density") === "compact");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState("");
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return units.filter((u) => {
+    const rows = units.filter((u) => {
       const cls = stateClass(u);
       if (failedOnly && cls !== "failed") return false;
       if (kind !== "all" && u.kind !== kind) return false;
@@ -743,7 +759,12 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
       if (status !== "all" && cls !== status) return false;
       return !needle || `${u.name} ${u.description || ""} ${u.image || ""} ${u.pod || ""}`.toLowerCase().includes(needle);
     });
-  }, [failedOnly, kind, q, scope, status, units]);
+    return rows.sort((a, b) => {
+      const av = sort === "state" ? stateLabel(a) : sort === "scope" ? a.scope : sort === "kind" ? a.kind : a.name;
+      const bv = sort === "state" ? stateLabel(b) : sort === "scope" ? b.scope : sort === "kind" ? b.kind : b.name;
+      return av.localeCompare(bv);
+    });
+  }, [failedOnly, kind, q, scope, sort, status, units]);
   const kinds = ["all", ...Array.from(new Set(units.map((u) => u.kind))).sort()];
   const scopes = ["all", ...Array.from(new Set(units.map((u) => u.scope))).sort()];
   const selectedUnits = filtered.filter((u) => selected.has(`${u.scope}/${u.name}`));
@@ -756,6 +777,15 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
   useEffect(() => {
     localStorage.setItem("rookery-units-density", compact ? "compact" : "comfortable");
   }, [compact]);
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (q) next.set("q", q);
+    if (kind !== "all") next.set("kind", kind);
+    if (scope !== "all") next.set("scope", scope);
+    if (status !== (failedOnly ? "failed" : "all")) next.set("status", status);
+    if (sort !== "name") next.set("sort", sort);
+    setParams(next, { replace: true });
+  }, [failedOnly, kind, q, scope, setParams, sort, status]);
 
   function toggleUnit(unit: Unit, checked: boolean) {
     const key = `${unit.scope}/${unit.name}`;
@@ -819,6 +849,7 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
         <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name, image, pod..." /></label>
         <select className="input" value={kind} onChange={(e) => setKind(e.target.value)}>{kinds.map((k) => <option key={k}>{k}</option>)}</select>
         <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
+        <select className="input" value={sort} onChange={(e) => setSort(e.target.value)}><option value="name">sort name</option><option value="state">sort state</option><option value="scope">sort scope</option><option value="kind">sort kind</option></select>
         <label className="check density-toggle"><input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} /> compact rows</label>
       </div>
       {!auth.readOnly && filtered.length > 0 && (
@@ -906,13 +937,20 @@ function UnitDetail() {
   const [members, setMembers] = useState<Unit[]>([]);
   const [acting, setActing] = useState("");
   const cls = unit ? stateClass(unit) : "unknown";
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    dirtyRef.current = content !== savedContent;
+  }, [content, savedContent]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { preserveDirty?: boolean }) => {
     try {
       const { body } = await api<{ unit: Unit; content: string }>(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`);
       setUnit(body.unit);
-      setContent(body.content);
-      setSavedContent(body.content);
+      const preserveDirty = opts?.preserveDirty ?? dirtyRef.current;
+      if (!preserveDirty) {
+        setContent(body.content);
+        setSavedContent(body.content);
+      }
       setError("");
       if (body.unit.kind === "pod") {
         const all = await api<{ units?: Unit[] }>("/api/units");
@@ -953,7 +991,7 @@ function UnitDetail() {
     try {
       await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/action`, { method: "POST", body: JSON.stringify({ action }) });
       toast(`${action}: ok`);
-      load();
+      load({ preserveDirty: false });
     } catch (e) {
       toast(`${action}: ${(e as Error).message}`, true);
     } finally {
@@ -1350,6 +1388,7 @@ function FleetView() {
   const [loading, setLoading] = useState(true);
   const [newNodeID, setNewNodeID] = useState("");
   const [newNodeTarget, setNewNodeTarget] = useState("");
+  const [q, setQ] = useState("");
   const load = useCallback(async () => {
     try {
       const { body } = await api<{ nodes?: ManagedNode[]; license?: LicenseStatus }>("/api/nodes");
@@ -1366,6 +1405,10 @@ function FleetView() {
   useEffect(() => { load(); }, [load]);
   const totalUnits = nodes.reduce((sum, n) => sum + n.units, 0);
   const failed = nodes.reduce((sum, n) => sum + n.failed, 0);
+  const filteredNodes = nodes.filter((node) => {
+    const needle = q.trim().toLowerCase();
+    return !needle || `${node.id} ${node.address || ""} ${(node.labels || []).join(" ")} ${node.errors?.join(" ") || ""}`.toLowerCase().includes(needle);
+  });
   async function addNode() {
     try {
       await api("/api/nodes", { method: "POST", body: JSON.stringify({ id: newNodeID, target: newNodeTarget }) });
@@ -1395,7 +1438,8 @@ function FleetView() {
         </div>
       </Panel>}
       <Panel title="Nodes" icon={Network}>
-        {loading ? <p className="muted">Loading nodes...</p> : nodes.length ? nodes.map((node) => <NodeRow key={node.id} node={node} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <p className="muted">No managed nodes configured.</p>}
+        <div className="filterbar"><label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search nodes..." /></label></div>
+        {loading ? <p className="muted">Loading nodes...</p> : filteredNodes.length ? filteredNodes.map((node) => <NodeRow key={node.id} node={node} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <p className="muted">No matching nodes.</p>}
       </Panel>
       <Panel title="Groups" icon={ListFilter}>
         {groups.length ? groups.map((group) => <div className="history-row" key={group.label}>
@@ -1414,16 +1458,17 @@ function FleetView() {
 function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: boolean; onChanged: () => void }) {
   const api = useApi();
   const { toast } = useApiContext();
+  const [labelsOpen, setLabelsOpen] = useState(false);
+  const [labelDraft, setLabelDraft] = useState(node.labels?.join(", ") || "");
   const scopeText = node.scopes.map((s) => s.system ? `${s.label} (rootful)` : `${s.label} (${s.user || "user"} rootless)`).join(", ");
   const rootful = node.rootful || { units: 0, running: 0, failed: 0, unknown: 0 };
   const rootless = node.rootless || { units: 0, running: 0, failed: 0, unknown: 0 };
   const memPct = node.metrics?.memTotalKb ? Math.round(100 * (1 - (node.metrics.memAvailKb || 0) / node.metrics.memTotalKb)) : null;
-  async function editLabels() {
-    const value = prompt(`Labels for ${node.local ? "local" : node.id}`, node.labels?.join(", ") || "");
-    if (value == null) return;
+  async function saveLabels() {
     try {
-      await api(`/api/nodes/${encodeURIComponent(node.id)}/labels`, { method: "PATCH", body: JSON.stringify({ labels: value.split(",") }) });
+      await api(`/api/nodes/${encodeURIComponent(node.id)}/labels`, { method: "PATCH", body: JSON.stringify({ labels: labelDraft.split(",") }) });
       toast("node labels updated");
+      setLabelsOpen(false);
       onChanged();
     } catch (e) {
       toast((e as Error).message, true);
@@ -1457,8 +1502,14 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
       <span className="badge badge-running">{node.running} running</span>
       {node.failed > 0 && <span className="badge badge-failed">{node.failed} failed</span>}
       {node.unknown > 0 && <span className="badge">{node.unknown} unknown</span>}
-      {editable && <button className="btn btn-sm" onClick={editLabels}><SquarePen size={14} /> labels</button>}
+      {editable && <button className="btn btn-sm" onClick={() => { setLabelDraft(node.labels?.join(", ") || ""); setLabelsOpen(true); }}><SquarePen size={14} /> labels</button>}
       {editable && !node.local && <button className="btn btn-sm btn-danger" onClick={removeNode}><Trash2 size={14} /> remove</button>}
+      {labelsOpen && <Overlay title={`Labels for ${node.local ? "local" : node.id}`} onClose={() => setLabelsOpen(false)}>
+        <div className="stack-form">
+          <input className="input" value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)} placeholder="prod, gpu" />
+          <button className="btn btn-accent" onClick={saveLabels}><Save size={16} /> Save labels</button>
+        </div>
+      </Overlay>}
     </div>
   );
 }
@@ -1470,6 +1521,7 @@ function PoliciesView() {
   const [loading, setLoading] = useState(true);
   const [severity, setSeverity] = useState("all");
   const [visibility, setVisibility] = useState<"active" | "all" | "waived">("active");
+  const [q, setQ] = useState("");
   const load = useCallback(async () => {
     try {
       const { body } = await api<{ findings?: PolicyFinding[] }>("/api/policies");
@@ -1506,7 +1558,11 @@ function PoliciesView() {
   useEffect(() => {
     if (!severityOptions.includes(severity)) setSeverity("all");
   }, [severity, severityOptions]);
-  const filtered = countSource.filter((finding) => severity === "all" || severityOf(finding) === severity);
+  const filtered = countSource.filter((finding) => {
+    const needle = q.trim().toLowerCase();
+    if (severity !== "all" && severityOf(finding) !== severity) return false;
+    return !needle || `${finding.policy} ${finding.node} ${finding.scope} ${finding.unit || ""} ${finding.message} ${finding.waiverReason || ""}`.toLowerCase().includes(needle);
+  });
   return (
     <Page title="Policy" kicker="Fleet checks">
       <div className="tiles">
@@ -1517,6 +1573,7 @@ function PoliciesView() {
       </div>
       <Panel title={`Findings (${filtered.length}/${countSource.length})`} icon={Shield}>
         <div className="filterbar">
+          <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search findings..." /></label>
           <label className="field-label">Status<select className="input" value={visibility} onChange={(e) => setVisibility(e.target.value as "active" | "all" | "waived")}>
             <option value="active">active ({active.length})</option>
             <option value="all">all ({findings.length})</option>
@@ -1535,13 +1592,14 @@ function PoliciesView() {
 function PolicyRow({ finding, editable, onChanged }: { finding: PolicyFinding; editable?: boolean; onChanged: () => void }) {
   const api = useApi();
   const { toast } = useApiContext();
+  const [waiveOpen, setWaiveOpen] = useState(false);
+  const [reason, setReason] = useState(finding.waiverReason || "");
   const badge = finding.severity === "critical" ? "badge-failed" : finding.severity === "warn" ? "badge-warn" : "";
   async function waive() {
-    const reason = prompt("Reason for waiving this finding", finding.waiverReason || "");
-    if (reason == null) return;
     try {
       await api("/api/policies/waivers", { method: "POST", body: JSON.stringify({ key: finding.key, reason }) });
       toast("policy finding waived");
+      setWaiveOpen(false);
       onChanged();
     } catch (e) {
       toast((e as Error).message, true);
@@ -1567,7 +1625,13 @@ function PolicyRow({ finding, editable, onChanged }: { finding: PolicyFinding; e
       <span className="grow" />
       <span className={`badge ${badge}`}>{finding.severity}</span>
       {finding.waived && <span className="badge">waived</span>}
-      {editable && (finding.waived ? <button className="btn btn-sm" onClick={unwaive}><X size={14} /> unwaive</button> : <button className="btn btn-sm" onClick={waive}><Check size={14} /> waive</button>)}
+      {editable && (finding.waived ? <button className="btn btn-sm" onClick={unwaive}><X size={14} /> unwaive</button> : <button className="btn btn-sm" onClick={() => { setReason(finding.waiverReason || ""); setWaiveOpen(true); }}><Check size={14} /> waive</button>)}
+      {waiveOpen && <Overlay title="Waive finding" onClose={() => setWaiveOpen(false)}>
+        <div className="stack-form">
+          <textarea className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason" />
+          <button className="btn btn-accent" onClick={waive}><Check size={16} /> Waive</button>
+        </div>
+      </Overlay>}
     </div>
   );
 }
@@ -1700,6 +1764,7 @@ function ImportView() {
   return (
     <Page title="Import" kicker="Convert existing definitions into Quadlets" back={<BackButton />}>
       <Panel title="Source" icon={Import}>
+        {kind === "container" && <p className="banner">Local host only. Container import uses this Rookery host's Podman socket.</p>}
         <div className="import-layout">
           <div className="import-modes" role="tablist" aria-label="Import source type">
             {Object.entries(IMPORT_MODES).map(([k, m]) => {
@@ -1791,13 +1856,15 @@ function ImportResult({ unit, scope, sourceContainer = "" }: { unit: { name: str
 function UpdatesView() {
   const api = useApi();
   const { toast } = useApiContext();
+  const [params, setParams] = useSearchParams();
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const [summary, setSummary] = useState("");
   const [stale, setStale] = useState<{ count: number; bytes: number } | null>(null);
   const [operation, setOperation] = useState<{ title: string; lines: string[] } | null>(null);
-  const [q, setQ] = useState("");
-  const [scope, setScope] = useState("all");
-  const [status, setStatus] = useState("all");
+  const [q, setQ] = useState(params.get("q") || "");
+  const [scope, setScope] = useState(params.get("scope") || "all");
+  const [status, setStatus] = useState(params.get("status") || "all");
+  const [sort, setSort] = useState(params.get("sort") || "name");
   const available = updates.filter((u) => u.updateAvailable);
   const noted = updates.filter((u) => u.note && !u.updateAvailable);
   const current = updates.filter((u) => !u.note && !u.updateAvailable);
@@ -1809,7 +1876,19 @@ function UpdatesView() {
     if (status === "current" && (row.updateAvailable || row.note)) return false;
     if (status === "skipped" && (!row.note || row.updateAvailable)) return false;
     return !needle || `${row.name} ${row.image || ""} ${row.note || ""} ${row.scope}`.toLowerCase().includes(needle);
+  }).sort((a, b) => {
+    const av = sort === "scope" ? a.scope : sort === "status" ? (a.updateAvailable ? "available" : a.note || "current") : a.name;
+    const bv = sort === "scope" ? b.scope : sort === "status" ? (b.updateAvailable ? "available" : b.note || "current") : b.name;
+    return av.localeCompare(bv);
   });
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (q) next.set("q", q);
+    if (scope !== "all") next.set("scope", scope);
+    if (status !== "all") next.set("status", status);
+    if (sort !== "name") next.set("sort", sort);
+    setParams(next, { replace: true });
+  }, [q, scope, setParams, sort, status]);
 
   async function refreshStaleImages() {
     const staleResp = await api<{ count: number; bytes: number }>("/api/images/stale").catch(() => null);
@@ -1871,7 +1950,8 @@ function UpdatesView() {
 
   return (
     <Page title="Updates" kicker="Registry drift and stale image cleanup">
-      {operation && <OperationOverlay title={operation.title} lines={operation.lines} />}
+      {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
+      <p className="banner">Image prune and container import are local-host operations; remote hosts still support update checks and pulls where configured.</p>
       <div className="tiles">
         <MetricTile label="updates available" value={available.length} tone={available.length ? "warn" : "dim"} />
         <MetricTile label="current" value={current.length} tone={current.length ? "ok" : "dim"} />
@@ -1887,6 +1967,7 @@ function UpdatesView() {
           <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter checked units..." /></label>
           <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
           <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">all statuses</option><option value="available">update available</option><option value="current">current</option><option value="skipped">skipped / errors</option></select>
+          <select className="input" value={sort} onChange={(e) => setSort(e.target.value)}><option value="name">sort name</option><option value="scope">sort scope</option><option value="status">sort status</option></select>
         </div>
         {updates.length ? filtered.length ? filtered.map((row) => <div className="history-row" key={`${row.scope}/${row.name}`}><span className="grow">{row.name}<span className="muted"> {row.image}</span></span><span className="badge">{row.scope}</span><span className={row.updateAvailable ? "warn-text" : "muted"}>{row.updateAvailable ? "update available" : row.note || "current"}</span></div>) : <EmptyState title="No matching update rows" text="Adjust the update filters or run a fresh check." /> : <p className="muted">Run a check to populate results.</p>}
       </Panel>
@@ -1914,7 +1995,7 @@ function UpdateRow({ row, after, busy }: { row: UpdateInfo; after: () => Promise
   }
   return (
     <div className="history-row">
-      {operation && <OperationOverlay title={operation.title} lines={operation.lines} />}
+      {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
       <span className="grow"><Link to={`/unit/${encodeURIComponent(row.scope)}/${encodeURIComponent(row.name)}`}>{row.name}</Link><span className="muted"> {row.image}</span></span>
       <button className="btn btn-accent" disabled={busy || !!operation} onClick={update}><Download size={16} /> Pull + restart</button>
     </div>
@@ -1956,6 +2037,7 @@ function SecretsView() {
   const [usedBy, setUsedBy] = useState<Record<string, string[]>>({});
   const [name, setName] = useState("");
   const [data, setData] = useState("");
+  const [q, setQ] = useState("");
   const load = useCallback(async () => {
     const { body } = await api<{ secrets?: typeof secrets; usedBy?: Record<string, string[]> }>("/api/secrets");
     setSecrets(body.secrets || []);
@@ -1987,10 +2069,16 @@ function SecretsView() {
       toast((e as Error).message, true);
     }
   }
+  const filteredSecrets = secrets.filter((s) => {
+    const needle = q.trim().toLowerCase();
+    return !needle || `${s.name} ${s.driver || ""} ${(usedBy[s.name] || []).join(" ")}`.toLowerCase().includes(needle);
+  });
   return (
     <Page title="Secrets" kicker="Write-only Podman secrets">
       <Panel title="Stored secrets" icon={KeyRound}>
-        {secrets.length ? secrets.map((s) => <div className="history-row" key={s.name}><code>{s.name}</code><span className="badge">{s.driver || "file"}</span><span className="grow muted">{(usedBy[s.name] || []).join(", ") || "not referenced by any unit"}</span><button className="btn btn-sm btn-danger" onClick={() => del(s.name)}><Trash2 size={14} /> delete</button></div>) : <p className="muted">No secrets yet.</p>}
+        <p className="banner">Local host only. Remote Podman secrets are not managed from this page.</p>
+        <div className="filterbar"><label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search secrets..." /></label></div>
+        {filteredSecrets.length ? filteredSecrets.map((s) => <div className="history-row" key={s.name}><code>{s.name}</code><span className="badge">{s.driver || "file"}</span><span className="grow muted">{(usedBy[s.name] || []).join(", ") || "not referenced by any unit"}</span><button className="btn btn-sm btn-danger" onClick={() => del(s.name)}><Trash2 size={14} /> delete</button></div>) : <p className="muted">{secrets.length ? "No matching secrets." : "No secrets yet."}</p>}
       </Panel>
       <Panel title="New secret" icon={Plus}>
         <input className="input wide" placeholder="name, e.g. db-password" value={name} onChange={(e) => setName(e.target.value)} />
@@ -2002,12 +2090,13 @@ function SecretsView() {
 }
 
 type LocalUser = { name: string; email?: string; role: string; mustChangePassword?: boolean; mustSetEmail?: boolean };
+type APIToken = { name: string; role: string; expiresAt?: string; lastUsedAt?: string; createdAt?: string };
 type SettingItem = { key: string; label: string; value: unknown; source: string; locked: boolean; editable: boolean; restartRequired?: boolean };
 type SettingGroup = { name: string; items: SettingItem[] };
 
 function SettingsView({ host }: { host: HostInfo | null }) {
   const { auth } = useApiContext();
-  const tabs = auth.readOnly && auth.role !== "admin" ? ["Account"] : ["Account", "Users", "Authentication", "Deployment", "Backup", "Audit", "About"];
+  const tabs = auth.readOnly && auth.role !== "admin" ? ["Account"] : ["Account", "Users", "Tokens", "Authentication", "Deployment", "Backup", "Audit", "About"];
   const [tab, setTab] = useState(tabs[0]);
   return (
     <Page title="Settings" kicker="Accounts, authentication, and deployment">
@@ -2016,9 +2105,10 @@ function SettingsView({ host }: { host: HostInfo | null }) {
       </div>
       {tab === "Account" && <AccountSettings />}
       {tab === "Users" && <UsersSettings />}
+      {tab === "Tokens" && <TokensSettings />}
       {tab === "Backup" && <BackupSettings />}
       {tab === "Audit" && <AuditSettings />}
-      {tab !== "Account" && tab !== "Users" && tab !== "Backup" && tab !== "Audit" && <AppSettings tab={tab} host={host} />}
+      {tab !== "Account" && tab !== "Users" && tab !== "Tokens" && tab !== "Backup" && tab !== "Audit" && <AppSettings tab={tab} host={host} />}
     </Page>
   );
 }
@@ -2057,6 +2147,58 @@ function AccountSettings() {
         </form>
       ) : <p className="muted">Share-link sessions cannot change account settings.</p>}
     </Panel>
+  );
+}
+
+function TokensSettings() {
+  const api = useApi();
+  const { toast } = useApiContext();
+  const [tokens, setTokens] = useState<APIToken[]>([]);
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("viewer");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [created, setCreated] = useState("");
+  const load = useCallback(async () => {
+    const { body } = await api<{ tokens?: APIToken[] }>("/api/tokens");
+    setTokens(body.tokens || []);
+  }, [api]);
+  useEffect(() => { load().catch((e) => toast((e as Error).message, true)); }, [load, toast]);
+  async function create() {
+    try {
+      const { body } = await api<{ token?: string }>("/api/tokens", { method: "POST", body: JSON.stringify({ name, role, expiresAt: expiresAt || undefined }) });
+      setCreated(body.token || "");
+      setName("");
+      setExpiresAt("");
+      toast("token created");
+      load();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  async function revoke(tokenName: string) {
+    try {
+      await api(`/api/tokens/${encodeURIComponent(tokenName)}`, { method: "DELETE" });
+      toast("token revoked");
+      load();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  return (
+    <>
+      {created && <p className="banner"><b>New token:</b> <code>{created}</code></p>}
+      <Panel title="API tokens" icon={KeyRound}>
+        {tokens.length ? tokens.map((t) => <div className="history-row" key={t.name}><code>{t.name}</code><span className="badge">{t.role}</span><span className="muted">last used {t.lastUsedAt || "never"}</span><span className="grow" /><button className="btn btn-sm btn-danger" onClick={() => revoke(t.name)}><Trash2 size={14} /> revoke</button></div>) : <p className="muted">No API tokens yet.</p>}
+      </Panel>
+      <Panel title="Create token" icon={Plus}>
+        <div className="filterbar">
+          <input className="input" placeholder="name" value={name} onChange={(e) => setName(e.target.value)} />
+          <select className="input" value={role} onChange={(e) => setRole(e.target.value)}><option value="viewer">viewer</option><option value="admin">admin</option></select>
+          <input className="input" placeholder="expires RFC3339 optional" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+          <button className="btn btn-accent" disabled={!name} onClick={create}><Plus size={16} /> Create</button>
+        </div>
+      </Panel>
+    </>
   );
 }
 
@@ -2101,10 +2243,12 @@ function BackupSettings() {
 function AuditSettings() {
   const api = useApi();
   const { toast } = useApiContext();
+  const [params, setParams] = useSearchParams();
   const [events, setEvents] = useState<AuditEvent[]>([]);
-  const [q, setQ] = useState("");
-  const [actor, setActor] = useState("all");
-  const [action, setAction] = useState("all");
+  const [q, setQ] = useState(params.get("q") || "");
+  const [actor, setActor] = useState(params.get("actor") || "all");
+  const [action, setAction] = useState(params.get("action") || "all");
+  const [sort, setSort] = useState(params.get("sort") || "time");
   const load = useCallback(async () => {
     const { body } = await api<{ events?: AuditEvent[] }>("/api/audit?limit=100");
     setEvents(body.events || []);
@@ -2118,7 +2262,19 @@ function AuditSettings() {
     if (actor !== "all" && eventActor !== actor) return false;
     if (action !== "all" && event.action !== action) return false;
     return !needle || `${event.action} ${eventActor} ${event.target || ""} ${JSON.stringify(event.detail || "")}`.toLowerCase().includes(needle);
+  }).sort((a, b) => {
+    if (sort === "actor") return (a.actor || "system").localeCompare(b.actor || "system");
+    if (sort === "action") return a.action.localeCompare(b.action);
+    return (b.createdAt || "").localeCompare(a.createdAt || "");
   });
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (q) next.set("q", q);
+    if (actor !== "all") next.set("actor", actor);
+    if (action !== "all") next.set("action", action);
+    if (sort !== "time") next.set("sort", sort);
+    setParams(next, { replace: true });
+  }, [action, actor, q, setParams, sort]);
   const authEvents = events.filter((event) => event.action.startsWith("auth.") || event.action.startsWith("setup.") || event.action.startsWith("onboarding.")).length;
   const unitEvents = events.filter((event) => event.action.startsWith("unit.")).length;
   const adminEvents = events.length - authEvents - unitEvents;
@@ -2135,6 +2291,7 @@ function AuditSettings() {
           <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter audit events..." /></label>
           <select className="input" value={actor} onChange={(e) => setActor(e.target.value)}>{actors.map((name) => <option key={name}>{name}</option>)}</select>
           <select className="input" value={action} onChange={(e) => setAction(e.target.value)}>{actions.map((name) => <option key={name}>{name}</option>)}</select>
+          <select className="input" value={sort} onChange={(e) => setSort(e.target.value)}><option value="time">sort time</option><option value="actor">sort actor</option><option value="action">sort action</option></select>
         </div>
         {filtered.length ? filtered.map((event) => <div className="history-row audit-row" key={event.id}>
         <div>
@@ -2155,10 +2312,13 @@ function UsersSettings() {
   const [me, setMe] = useState("");
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
+  const [sort, setSort] = useState("name");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("viewer");
+  const [resetUser, setResetUser] = useState("");
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
   const load = useCallback(async () => {
     const { body } = await api<{ users?: LocalUser[]; me?: string }>("/api/users");
     setUsers(body.users || []);
@@ -2196,11 +2356,11 @@ function UsersSettings() {
       toast((e as Error).message, true);
     }
   }
-  async function resetPassword(name: string) {
-    const password = prompt(`New password for ${name}`);
-    if (!password) return;
+  async function resetPassword(name: string, password: string) {
     try {
       await api(`/api/users/${encodeURIComponent(name)}/password`, { method: "POST", body: JSON.stringify({ password }) });
+      setResetUser("");
+      setResetPasswordValue("");
       toast(`password updated for ${name}`);
     } catch (e) {
       toast((e as Error).message, true);
@@ -2213,6 +2373,10 @@ function UsersSettings() {
     const needle = q.trim().toLowerCase();
     if (roleFilter !== "all" && u.role !== roleFilter) return false;
     return !needle || `${u.name} ${u.email || ""} ${u.role}`.toLowerCase().includes(needle);
+  }).sort((a, b) => {
+    const av = sort === "role" ? a.role : sort === "email" ? a.email || "" : a.name;
+    const bv = sort === "role" ? b.role : sort === "email" ? b.email || "" : b.name;
+    return av.localeCompare(bv);
   });
   return (
     <>
@@ -2226,6 +2390,7 @@ function UsersSettings() {
         <div className="filterbar">
           <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter users..." /></label>
           <select className="input" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}><option value="all">all roles</option><option value="admin">admin</option><option value="viewer">viewer</option></select>
+          <select className="input" value={sort} onChange={(e) => setSort(e.target.value)}><option value="name">sort name</option><option value="email">sort email</option><option value="role">sort role</option></select>
         </div>
         {filtered.length ? filtered.map((u) => <div className="history-row settings-user-row" key={u.name}>
           <code>{u.name}{u.name === me ? " (you)" : ""}</code>
@@ -2235,10 +2400,16 @@ function UsersSettings() {
           {u.mustSetEmail && <span className="badge badge-warn">email required</span>}
           {u.mustChangePassword && <span className="badge badge-warn">password reset</span>}
           <span className="grow" />
-          <button className="btn btn-sm" onClick={() => resetPassword(u.name)}><KeyRound size={14} /> reset</button>
+          <button className="btn btn-sm" onClick={() => { setResetUser(u.name); setResetPasswordValue(""); }}><KeyRound size={14} /> reset</button>
           <button className="btn btn-sm btn-danger" onClick={() => del(u.name)}><Trash2 size={14} /> delete</button>
         </div>) : <EmptyState title="No matching users" text="Adjust the account filters or add a local user." />}
       </Panel>
+      {resetUser && <Overlay title={`Reset ${resetUser}`} onClose={() => setResetUser("")}>
+        <div className="stack-form">
+          <input className="input" type="password" autoComplete="new-password" placeholder="New password" value={resetPasswordValue} onChange={(e) => setResetPasswordValue(e.target.value)} />
+          <button className="btn btn-accent" disabled={!resetPasswordValue} onClick={() => resetPassword(resetUser, resetPasswordValue)}><KeyRound size={16} /> Reset password</button>
+        </div>
+      </Overlay>}
       <Panel title="Add user" icon={Plus}>
         <div className="filterbar">
           <input className="input" placeholder="username" value={username} onChange={(e) => setUsername(e.target.value)} />
@@ -2282,6 +2453,14 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
       toast((e as Error).message, true);
     }
   }
+  async function testAlerts() {
+    try {
+      await api("/api/alerts/test", { method: "POST", body: "{}" });
+      toast("test alert sent");
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
   if (tab === "About") {
     const limitText = (n?: number) => n === 0 ? "unlimited" : n == null ? "unknown" : String(n);
     const rows: Array<[string, string]> = [
@@ -2302,6 +2481,7 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
   return (
     <Panel title={tab} icon={tab === "Authentication" ? Shield : HardDrive} action={Object.keys(draft).length > 0 ? <button className="btn btn-accent" onClick={save}><Save size={16} /> Save</button> : null}>
       {restart && <p className="banner banner-warn">Restart Rookery to apply saved settings.</p>}
+      {tab === "Deployment" && <div className="action-row"><button className="btn" onClick={testAlerts}><Zap size={16} /> Send test alert</button></div>}
       <div className="settings-list">
         {(group?.items || []).map((item) => <SettingControl key={item.key} item={item} value={draft[item.key] ?? item.value} onChange={(value) => setDraft((d) => ({ ...d, [item.key]: value }))} />)}
       </div>
@@ -2407,6 +2587,14 @@ function Panel({ title, icon: Icon, action, children }: { title: string; icon: R
 }
 
 function Overlay({ title, onClose, children }: { title: string; onClose?: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    if (!onClose) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label={title}>
       <div className="overlay-panel">
@@ -2417,9 +2605,9 @@ function Overlay({ title, onClose, children }: { title: string; onClose?: () => 
   );
 }
 
-function OperationOverlay({ title, lines }: { title: string; lines: string[] }) {
+function OperationOverlay({ title, lines, onClose }: { title: string; lines: string[]; onClose?: () => void }) {
   return (
-    <Overlay title={title}>
+    <Overlay title={title} onClose={onClose}>
       <div className="operation-body">
         <RefreshCw className="spin" size={20} />
         <div>{lines.map((line) => <div key={line}>{line}</div>)}</div>

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/tobagin/rookery/internal/appdb"
 )
@@ -15,6 +17,21 @@ type SettingItem struct {
 	Locked          bool   `json:"locked"`
 	Editable        bool   `json:"editable"`
 	RestartRequired bool   `json:"restartRequired"`
+}
+
+func (s *Server) handleAlertTest(w http.ResponseWriter, r *http.Request) {
+	if s.alertTest == nil {
+		httpError(w, http.StatusServiceUnavailable, "failure alerts are not configured")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.alertTest(ctx); err != nil {
+		httpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.audit(r, "alerts.test", "alerts", nil)
+	writeJSON(w, http.StatusOK, map[string]any{"sent": true})
 }
 
 type SettingGroup struct {

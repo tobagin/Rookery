@@ -65,7 +65,7 @@ func (u *unitJSON) fillStatus(st systemd.UnitStatus) {
 func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 	var out []unitJSON
 	scopeErrors := map[string]string{}
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		found, err := discoverArea(r.Context(), area)
 		if err != nil {
 			scopeErrors[area.Label] = err.Error()
@@ -255,7 +255,7 @@ func inspectHealth(raw []byte) string {
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	out := map[string]unitStats{}
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		found, err := discoverArea(r.Context(), area)
 		if err != nil {
 			continue
@@ -982,7 +982,7 @@ func (s *Server) handleGPUs(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for _, a := range s.areas {
+	for _, a := range s.areasSnapshot() {
 		if !a.Remote() || seen[a.Scope.SSH] {
 			continue
 		}
@@ -1022,8 +1022,9 @@ func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) scopeLabels() []string {
-	labels := make([]string, len(s.areas))
-	for i, a := range s.areas {
+	areas := s.areasSnapshot()
+	labels := make([]string, len(areas))
+	for i, a := range areas {
 		labels[i] = a.Label
 	}
 	return labels

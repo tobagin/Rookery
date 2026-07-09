@@ -46,7 +46,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		found, err := discoverArea(r.Context(), area)
 		if err != nil {
 			continue

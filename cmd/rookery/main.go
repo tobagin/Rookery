@@ -46,6 +46,10 @@ func main() {
 		`comma-separated remote hosts to manage over ssh, as alias=user@host (e.g. "nas=root@nas.local,media=deploy@media.lan")`)
 	alerts := flag.String("alerts", envOr("ROOKERY_ALERTS", ""),
 		`comma-separated failure-alert destinations: ntfy://host/topic, telegram://BOT_TOKEN@CHAT_ID, or an http(s) webhook URL`)
+	alertInterval := flag.Duration("alert-interval", envDurationOr("ROOKERY_ALERT_INTERVAL", 30*time.Second),
+		"failure-alert polling interval")
+	alertCooldown := flag.Duration("alert-cooldown", envDurationOr("ROOKERY_ALERT_COOLDOWN", 0),
+		"minimum time between repeated failure alerts for the same unit; 0 disables suppression")
 	oidcIssuer := flag.String("oidc-issuer", envOr("ROOKERY_OIDC_ISSUER", ""), "OIDC issuer URL for SSO")
 	oidcClientID := flag.String("oidc-client-id", envOr("ROOKERY_OIDC_CLIENT_ID", ""), "OIDC client ID")
 	oidcClientSecret := flag.String("oidc-client-secret", envOr("ROOKERY_OIDC_CLIENT_SECRET", ""), "OIDC client secret")
@@ -175,12 +179,17 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go srv.WatchFailures(context.Background(), 30*time.Second, func(title, msg string) {
+		sendAlert := func(title, msg string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			notifier.Send(ctx, title, msg)
+		}
+		srv.SetAlertTest(func(ctx context.Context) error {
+			notifier.Send(ctx, "Rookery: test notification", "Alert delivery is configured.")
+			return nil
 		})
-		log.Printf("failure alerts enabled (%s)", *alerts)
+		go srv.WatchFailuresWithCooldown(context.Background(), *alertInterval, *alertCooldown, sendAlert)
+		log.Printf("failure alerts enabled (%s, interval %s, cooldown %s)", *alerts, *alertInterval, *alertCooldown)
 	}
 
 	labels := make([]string, len(areas))

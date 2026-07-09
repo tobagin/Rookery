@@ -126,6 +126,8 @@ manage alice's rootless units).
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
 | `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...`; `node.root=target,node.user=target` groups rootful/rootless targets under one fleet node |
 | `-alerts` | `ROOKERY_ALERTS` | — | failure alerts: `ntfy://host/topic`, `telegram://TOKEN@CHAT`, webhook URL |
+| `-alert-interval` | `ROOKERY_ALERT_INTERVAL` | `30s` | failure-alert polling interval |
+| `-alert-cooldown` | `ROOKERY_ALERT_COOLDOWN` | `0` | minimum time between repeated failure alerts for the same unit |
 | `-oidc-issuer` | `ROOKERY_OIDC_ISSUER` | — | OIDC issuer URL for SSO |
 | `-oidc-client-id` | `ROOKERY_OIDC_CLIENT_ID` | — | OIDC client ID |
 | `-oidc-client-secret` | `ROOKERY_OIDC_CLIENT_SECRET` | — | OIDC client secret |
@@ -170,6 +172,14 @@ ROOKERY_DISABLE_PASSWORD_LOGIN=true
 
 That hides the username/password form and rejects `/api/login`; Rookery will
 refuse to start in this mode unless OIDC is configured.
+
+### FAQ
+
+**Can I exec into containers or browse volumes?** No. Rookery deliberately
+keeps workload mutations flowing through Quadlet files and systemd. It edits,
+validates, starts, stops, restarts, and reads journal logs; it does not provide
+an interactive container shell or volume file manager. Use `podman exec` or SSH
+on the host when you need break-glass inspection.
 
 ### Install as a service
 

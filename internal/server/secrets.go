@@ -36,7 +36,7 @@ func (s *Server) secretsClient(w http.ResponseWriter) (secretsAPI, bool) {
 // "name[,type=...,target=...]"; the name is the first comma field).
 func (s *Server) secretUsage(ctx context.Context) map[string][]string {
 	used := map[string][]string{}
-	for _, area := range s.areas {
+	for _, area := range s.areasSnapshot() {
 		if area.Remote() {
 			continue // podman secrets are host-local
 		}
