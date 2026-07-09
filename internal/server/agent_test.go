@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	papi "github.com/rookerylabs/rookery-agent-api"
@@ -31,8 +32,18 @@ func fakeAgent(t *testing.T, token string, units []papi.Unit) *httptest.Server {
 	mux.HandleFunc("GET "+papi.PathUnits, guard(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(units)
 	}))
+	mux.HandleFunc("POST "+papi.PathUnitsPrefix+"{name}/{action}", guard(func(w http.ResponseWriter, r *http.Request) {
+		gotAction.name = r.PathValue("name")
+		gotAction.action = r.PathValue("action")
+		_ = json.NewEncoder(w).Encode(papi.ActionResult{Unit: gotAction.name, Action: gotAction.action, OK: true})
+	}))
 	return httptest.NewServer(mux)
 }
+
+// recorded captures the last lifecycle call the fake agent received.
+type recorded struct{ name, action string }
+
+var gotAction recorded
 
 func TestNodeInventoryViaAgent(t *testing.T) {
 	units := []papi.Unit{
@@ -63,6 +74,66 @@ func TestNodeInventoryViaAgent(t *testing.T) {
 	}
 	if len(n.Errors) != 0 {
 		t.Errorf("unexpected errors: %v", n.Errors)
+	}
+}
+
+func TestListUnitsViaAgent(t *testing.T) {
+	units := []papi.Unit{
+		{Name: "ntfy.container", Kind: "container", Service: "ntfy.service", Status: papi.Status{Load: "loaded", Active: "active", Sub: "running"}},
+	}
+	ts := fakeAgent(t, "tok", units)
+	defer ts.Close()
+	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+
+	w := httptest.NewRecorder()
+	s.handleListUnits(w, httptest.NewRequest(http.MethodGet, "/api/units", nil))
+	var body struct {
+		Units []unitJSON `json:"units"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Units) != 1 {
+		t.Fatalf("got %d units, want 1", len(body.Units))
+	}
+	u := body.Units[0]
+	if u.Name != "ntfy.container" || u.Active != "active" || u.Scope != "pi" || !u.ReadOnly {
+		t.Errorf("agent unit mapped wrong: %+v", u)
+	}
+}
+
+func TestAgentActionRoutesToAgent(t *testing.T) {
+	ts := fakeAgent(t, "tok", nil)
+	defer ts.Close()
+	gotAction = recorded{}
+	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+
+	r := httptest.NewRequest(http.MethodPost, "/api/units/pi/ntfy.container/action",
+		strings.NewReader(`{"action":"restart"}`))
+	r.SetPathValue("scope", "pi")
+	r.SetPathValue("name", "ntfy.container")
+	w := httptest.NewRecorder()
+	s.handleAction(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", w.Code, w.Body)
+	}
+	if gotAction.action != "restart" || gotAction.name != "ntfy.service" {
+		t.Errorf("agent got %+v, want name=ntfy.service action=restart", gotAction)
+	}
+}
+
+func TestAgentActionRejectsEnable(t *testing.T) {
+	ts := fakeAgent(t, "tok", nil)
+	defer ts.Close()
+	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"action":"enable"}`))
+	r.SetPathValue("scope", "pi")
+	r.SetPathValue("name", "ntfy.container")
+	w := httptest.NewRecorder()
+	s.handleAction(w, r)
+	if w.Code != http.StatusNotImplemented {
+		t.Errorf("enable via agent: status %d, want 501", w.Code)
 	}
 }
 
