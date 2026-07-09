@@ -452,8 +452,17 @@ function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
+// Spy-hopping seal above the waterline; the eye is a fill-rule hole so the
+// mark renders in one currentColor on any background.
 function BrandMark() {
-  return <span className="brand-mark" aria-hidden="true">🦭</span>;
+  return (
+    <span className="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path fillRule="evenodd" d="M7.6 18.0 C7.9 15.0 8.2 12.4 8.1 10.2 C8.0 9.6 7.6 9.4 7.0 9.3 C6.2 9.2 5.7 8.7 5.7 8.0 C5.7 7.3 6.3 6.9 7.1 6.9 C7.6 6.9 8.0 6.8 8.3 6.5 C8.5 6.3 8.6 6.1 8.7 5.8 C9.5 3.9 11.0 2.9 12.9 2.9 C15.8 2.9 17.6 5.1 17.6 8.0 C17.6 11.0 17.3 14.4 17.2 18.0 Z M10.9 5.9 m-0.95 0 a0.95 0.95 0 1 0 1.9 0 a0.95 0.95 0 1 0 -1.9 0" />
+        <rect x="2.5" y="17.6" width="19" height="2.4" rx="1.2" />
+      </svg>
+    </span>
+  );
 }
 
 function LoginView({ reloadAuth }: { reloadAuth: () => Promise<void> }) {
@@ -741,6 +750,22 @@ function Dashboard({ host }: { host: HostInfo | null }) {
     <Page title="Dashboard" kicker="Host overview">
       <ScopeErrors errors={scopeErrors} />
       {error && <p className="banner banner-error">{error}</p>}
+      {units.length > 0 && (
+        <div className="colony-strip" aria-label="Every unit by state">
+          {units.map((u) => {
+            const cls = u.health === "unhealthy" ? "failed" : stateClass(u);
+            return (
+              <Link
+                key={`${u.scope}/${u.name}`}
+                className={`colony-tick ${cls}`}
+                title={`${u.name} · ${stateLabel(u)}`}
+                aria-label={`${u.name}: ${stateLabel(u)}`}
+                to={`/unit/${encodeURIComponent(u.scope)}/${encodeURIComponent(u.name)}`}
+              />
+            );
+          })}
+        </div>
+      )}
       <div className="tiles">
         <MetricTile label="containers" value={`${model.runningContainers}/${model.containers}`} tone={model.runningContainers ? "ok" : "dim"} />
         <MetricTile label="pods" value={`${model.runningPods}/${model.pods}`} tone={model.runningPods ? "ok" : "dim"} />
