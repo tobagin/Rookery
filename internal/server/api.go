@@ -66,6 +66,10 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 	var out []unitJSON
 	scopeErrors := map[string]string{}
 	for _, area := range s.areasSnapshot() {
+		if area.ViaAgent() {
+			out = appendAgentUnits(r, area, out, scopeErrors)
+			continue
+		}
 		found, err := discoverArea(r.Context(), area)
 		if err != nil {
 			scopeErrors[area.Label] = err.Error()
@@ -525,6 +529,10 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
+	if area, found := s.area(r.PathValue("scope")); found && area.ViaAgent() {
+		s.handleAgentAction(w, r, area)
+		return
+	}
 	area, name, path, exists, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
