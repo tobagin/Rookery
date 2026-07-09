@@ -1,4 +1,14 @@
 import {
+  autocompletion,
+  CompletionContext,
+  completionKeymap,
+} from "@codemirror/autocomplete";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { bracketMatching, defaultHighlightStyle, foldGutter, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { searchKeymap } from "@codemirror/search";
+import { EditorState, Extension } from "@codemirror/state";
+import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
+import {
   Activity,
   AlertTriangle,
   Boxes,
@@ -35,6 +45,7 @@ import {
   SquarePen,
   Sun,
   Trash2,
+  Upload,
   UserRound,
   Users,
   X,
@@ -222,7 +233,7 @@ export function App() {
             <Route path="/updates" element={<AdminOnly><UpdatesView /></AdminOnly>} />
             <Route path="/gpus" element={<GPUsView />} />
             <Route path="/secrets" element={<AdminOnly><SecretsView /></AdminOnly>} />
-            <Route path="/settings" element={<AdminOnly><SettingsView host={host} /></AdminOnly>} />
+            <Route path="/settings" element={<SettingsView host={host} />} />
             <Route path="/users" element={<Navigate to="/settings" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
@@ -366,7 +377,7 @@ function navItems(readOnly: boolean) {
     { to: "/policies", label: "Policy", icon: Shield, group: "Govern" },
     { to: "/import", label: "Import", icon: Import, group: "Admin", admin: true },
     { to: "/secrets", label: "Secrets", icon: KeyRound, group: "Admin", admin: true },
-    { to: "/settings", label: "Settings", icon: Settings, group: "Admin", admin: true },
+    { to: "/settings", label: "Settings", icon: Settings, group: "Admin" },
   ];
   return base.filter((item) => !readOnly || !item.admin);
 }
@@ -544,6 +555,112 @@ function useUnits(poll = false) {
   return { units, scopeErrors, error, loading, reload: load };
 }
 
+function useDirtyGuard(dirty: boolean, message = "Discard unsaved changes?") {
+  useEffect(() => {
+    if (!dirty) return;
+    const beforeUnload = (ev: BeforeUnloadEvent) => {
+      ev.preventDefault();
+      ev.returnValue = message;
+    };
+    const click = (ev: MouseEvent) => {
+      const target = ev.target as Element | null;
+      const link = target?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!link || link.target || link.download || ev.defaultPrevented) return;
+      if (link.origin === window.location.origin && !window.confirm(message)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("click", click, true);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      document.removeEventListener("click", click, true);
+    };
+  }, [dirty, message]);
+}
+
+const QUADLET_KEYS: Record<string, string[]> = {
+  Container: ["AddCapability", "AddDevice", "ContainerName", "DropCapability", "Environment", "Exec", "HealthCmd", "HealthInterval", "HealthRetries", "HealthStartPeriod", "HealthTimeout", "Image", "Label", "Network", "NoHealthcheck", "Pod", "PublishPort", "Secret", "SecurityLabelDisable", "User", "Volume", "WorkingDir"],
+  Pod: ["GlobalArgs", "Network", "PodName", "PublishPort", "UserNS"],
+  Network: ["DisableDNS", "Driver", "Gateway", "IPv6", "Internal", "Label", "NetworkName", "Subnet"],
+  Volume: ["Copy", "Device", "Driver", "Group", "Image", "Label", "Options", "Type", "User", "VolumeName"],
+  Kube: ["ConfigMap", "ExitCodePropagation", "GlobalArgs", "KubeDownForce", "Network", "PublishPort", "Yaml"],
+  Image: ["AllTags", "Arch", "AuthFile", "CertDir", "Creds", "Image", "ImageTag", "OS", "TLSVerify", "Variant"],
+  Build: ["Annotation", "Arch", "AuthFile", "BuildArg", "CacheFrom", "CacheTo", "DNS", "File", "ImageTag", "Label", "Network", "Pull", "SetLabel", "Target", "TLSVerify"],
+  Unit: ["After", "Before", "Description", "Documentation", "Requires", "Wants"],
+  Service: ["Environment", "ExecStartPre", "ExecStopPost", "Restart", "RestartSec", "TimeoutStartSec", "TimeoutStopSec", "Type"],
+  Install: ["Alias", "RequiredBy", "WantedBy"],
+};
+
+function sectionAt(doc: string, pos: number) {
+  const before = doc.slice(0, pos).split("\n").reverse();
+  for (const line of before) {
+    const m = line.trim().match(/^\[([^\]]+)\]$/);
+    if (m) return m[1];
+  }
+  return "";
+}
+
+function quadletCompletions(ctx: CompletionContext) {
+  const word = ctx.matchBefore(/[A-Za-z]*$/);
+  if (!word || (word.from === word.to && !ctx.explicit)) return null;
+  const section = sectionAt(ctx.state.doc.toString(), ctx.pos);
+  const keys = QUADLET_KEYS[section] || Object.values(QUADLET_KEYS).flat();
+  return {
+    from: word.from,
+    options: keys.map((key) => ({ label: `${key}=`, type: "property" })),
+  };
+}
+
+function CodeEditor({ value, onChange, readOnly, small, short, onSave }: { value: string; onChange: (value: string) => void; readOnly?: boolean; small?: boolean; short?: boolean; onSave?: () => void }) {
+  const host = useRef<HTMLDivElement | null>(null);
+  const view = useRef<EditorView | null>(null);
+  const onChangeRef = useRef(onChange);
+  const onSaveRef = useRef(onSave);
+  useEffect(() => { onChangeRef.current = onChange; onSaveRef.current = onSave; }, [onChange, onSave]);
+  useEffect(() => {
+    if (!host.current) return;
+    const extensions: Extension[] = [
+      lineNumbers(),
+      foldGutter(),
+      highlightSpecialChars(),
+      history(),
+      drawSelection(),
+      indentOnInput(),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      bracketMatching(),
+      autocompletion({ override: [quadletCompletions] }),
+      highlightActiveLine(),
+      highlightActiveLineGutter(),
+      keymap.of([
+        { key: "Mod-s", run: () => { onSaveRef.current?.(); return true; } },
+        ...defaultKeymap,
+        ...historyKeymap,
+        ...completionKeymap,
+        ...searchKeymap,
+      ]),
+      EditorView.lineWrapping,
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+      }),
+      EditorView.editable.of(!readOnly),
+      EditorState.readOnly.of(!!readOnly),
+    ];
+    view.current = new EditorView({ parent: host.current, state: EditorState.create({ doc: value, extensions }) });
+    return () => {
+      view.current?.destroy();
+      view.current = null;
+    };
+  }, [readOnly]);
+  useEffect(() => {
+    const v = view.current;
+    if (!v || v.state.doc.toString() === value) return;
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: value } });
+  }, [value]);
+  return <div ref={host} className={`code-editor cm-editor-wrap ${small ? "small" : ""} ${short ? "short" : ""}`} />;
+}
+
 function Dashboard({ host }: { host: HostInfo | null }) {
   const { units, scopeErrors, error, loading, reload } = useUnits(true);
   const [gpus, setGpus] = useState<GPUDevice[]>([]);
@@ -554,7 +671,7 @@ function Dashboard({ host }: { host: HostInfo | null }) {
   }, [api]);
 
   const model = useMemo(() => summarizeUnits(units), [units]);
-  const failed = units.filter((u) => stateClass(u) === "failed");
+  const failed = units.filter((u) => stateClass(u) === "failed" || u.health === "unhealthy");
   const m = host?.metrics || {};
   const memPct = m.memTotalKb ? Math.round(100 * (1 - (m.memAvailKb || 0) / m.memTotalKb)) : null;
 
@@ -607,11 +724,15 @@ function summarizeUnits(units: Unit[]) {
 
 function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
   const { units, scopeErrors, error, loading, reload } = useUnits(true);
+  const { auth, toast } = useApiContext();
+  const api = useApi();
   const [q, setQ] = useState("");
   const [kind, setKind] = useState("all");
   const [scope, setScope] = useState("all");
   const [status, setStatus] = useState<UnitState | "all">(failedOnly ? "failed" : "all");
   const [compact, setCompact] = useState(() => localStorage.getItem("rookery-units-density") === "compact");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState("");
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return units.filter((u) => {
@@ -625,6 +746,7 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
   }, [failedOnly, kind, q, scope, status, units]);
   const kinds = ["all", ...Array.from(new Set(units.map((u) => u.kind))).sort()];
   const scopes = ["all", ...Array.from(new Set(units.map((u) => u.scope))).sort()];
+  const selectedUnits = filtered.filter((u) => selected.has(`${u.scope}/${u.name}`));
   const statusCounts = useMemo(() => {
     const counts: Record<UnitState | "all", number> = { all: units.length, running: 0, failed: 0, pending: 0, stopped: 0, unknown: 0 };
     units.forEach((u) => { counts[stateClass(u)] += 1; });
@@ -634,6 +756,49 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
   useEffect(() => {
     localStorage.setItem("rookery-units-density", compact ? "compact" : "comfortable");
   }, [compact]);
+
+  function toggleUnit(unit: Unit, checked: boolean) {
+    const key = `${unit.scope}/${unit.name}`;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  function selectAllVisible(checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      filtered.forEach((u) => {
+        const key = `${u.scope}/${u.name}`;
+        if (checked) next.add(key);
+        else next.delete(key);
+      });
+      return next;
+    });
+  }
+
+  async function bulkAction(action: string) {
+    if (!selectedUnits.length) return;
+    if ((action === "stop" || action === "restart") && !confirm(`${action} ${selectedUnits.length} selected units?`)) return;
+    setBulkBusy(action);
+    try {
+      const { body } = await api<{ results?: Array<{ scope: string; name: string; ok: boolean; error?: string }> }>("/api/units/bulk-action", {
+        method: "POST",
+        body: JSON.stringify({ action, units: selectedUnits.map((u) => ({ scope: u.scope, name: u.name })) }),
+      });
+      const results = body.results || [];
+      const failed = results.filter((r) => !r.ok);
+      toast(failed.length ? `${action}: ${results.length - failed.length} ok, ${failed.length} failed` : `${action}: ${results.length} ok`, failed.length > 0);
+      setSelected(new Set());
+      reload();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBulkBusy("");
+    }
+  }
 
   return (
     <Page title={failedOnly ? "Failed units" : "Units"} kicker={failedOnly ? "Triage and restart" : "Search, filter, and act"}>
@@ -656,8 +821,15 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
         <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
         <label className="check density-toggle"><input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} /> compact rows</label>
       </div>
+      {!auth.readOnly && filtered.length > 0 && (
+        <div className="action-row">
+          <label className="check"><input type="checkbox" checked={selectedUnits.length === filtered.length && filtered.length > 0} onChange={(e) => selectAllVisible(e.target.checked)} /> select visible</label>
+          {selectedUnits.length > 0 && <span className="badge">{selectedUnits.length} selected</span>}
+          {["start", "stop", "restart"].map((a) => <button key={a} className="btn btn-sm" disabled={!selectedUnits.length || !!bulkBusy} onClick={() => bulkAction(a)}>{bulkBusy === a ? <RefreshCw className="spin" size={14} /> : actionIcon(a)} {a}</button>)}
+        </div>
+      )}
       {loading ? <p className="muted">Loading units...</p> : filtered.length ? (
-        <div className="unit-list">{filtered.map((u) => <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={reload} compact={compact} />)}</div>
+        <div className="unit-list">{filtered.map((u) => <div className="select-row" key={`${u.scope}/${u.name}`}>{!auth.readOnly && <input type="checkbox" checked={selected.has(`${u.scope}/${u.name}`)} onChange={(e) => toggleUnit(u, e.target.checked)} />}<UnitRow unit={u} onChanged={reload} compact={compact} /></div>)}</div>
       ) : <EmptyState title="No matching units" text="Adjust the filters or create a new unit." />}
     </Page>
   );
@@ -666,6 +838,7 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
 function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: () => void; compact?: boolean }) {
   const { auth, toast } = useApiContext();
   const api = useApi();
+  const [acting, setActing] = useState("");
   const cls = stateClass(unit);
   const canStart = cls === "stopped" || cls === "failed";
   const scopeKind = unit.scopeKind || (unit.scope === "system" ? "rootful" : "rootless");
@@ -673,12 +846,17 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
   async function action(act: string, ev: React.MouseEvent) {
     ev.preventDefault();
     ev.stopPropagation();
+    if (acting) return;
+    if (act === "stop" && cls === "running" && !confirm(`Stop ${unit.name}?`)) return;
+    setActing(act);
     try {
       await api(`/api/units/${encodeURIComponent(unit.scope)}/${encodeURIComponent(unit.name)}/action`, { method: "POST", body: JSON.stringify({ action: act }) });
       toast(`${act} ${unit.name}: ok`);
       onChanged();
     } catch (e) {
       toast(`${act} ${unit.name}: ${(e as Error).message}`, true);
+    } finally {
+      setActing("");
     }
   }
 
@@ -695,14 +873,17 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
         <span className={scopeKind === "rootful" ? "badge" : "badge badge-user"}>{scopeKind}</span>
         {unit.scope !== "system" && <span className="badge badge-user">{unit.scope}</span>}
         {!!unit.restarts && <span className="badge badge-warn">restart {unit.restarts}</span>}
+        {unit.health && <span className={`badge ${unit.health === "unhealthy" ? "badge-failed" : unit.health === "healthy" ? "badge-running" : "badge-warn"}`}>{unit.health}</span>}
+        {unit.stats && <span className="badge">{(unit.stats.cpuPct || 0).toFixed(1)}% cpu</span>}
+        {unit.stats?.memBytes ? <span className="badge">{fmtBytes(unit.stats.memBytes)}</span> : null}
         {unit.pod && <span className="badge">pod {unit.pod.replace(/\.pod$/, "")}</span>}
         {!!unit.gpus?.length && <span className="badge badge-gpu">gpu</span>}
       </span>
       {!auth.readOnly && (
         <span className="row-actions">
-          {canStart && <button className="btn icon-only" title="Start" onClick={(e) => action("start", e)}><Play size={16} /></button>}
-          {(cls === "running" || cls === "pending") && <button className="btn icon-only" title="Stop" onClick={(e) => action("stop", e)}><CircleStop size={16} /></button>}
-          <button className="btn icon-only" title="Restart" onClick={(e) => action("restart", e)}><RefreshCw size={16} /></button>
+          {canStart && <button className="btn icon-only" disabled={!!acting} title="Start" onClick={(e) => action("start", e)}>{acting === "start" ? <RefreshCw className="spin" size={16} /> : <Play size={16} />}</button>}
+          {(cls === "running" || cls === "pending") && <button className="btn icon-only" disabled={!!acting} title="Stop" onClick={(e) => action("stop", e)}>{acting === "stop" ? <RefreshCw className="spin" size={16} /> : <CircleStop size={16} />}</button>}
+          <button className="btn icon-only" disabled={!!acting} title="Restart" onClick={(e) => action("restart", e)}>{acting === "restart" ? <RefreshCw className="spin" size={16} /> : <RefreshCw size={16} />}</button>
         </span>
       )}
     </Link>
@@ -723,6 +904,7 @@ function UnitDetail() {
   const [validation, setValidation] = useState<{ validation?: ValidationResult; hints?: string[] } | null>(null);
   const [error, setError] = useState("");
   const [members, setMembers] = useState<Unit[]>([]);
+  const [acting, setActing] = useState("");
   const cls = unit ? stateClass(unit) : "unknown";
 
   const load = useCallback(async () => {
@@ -743,14 +925,39 @@ function UnitDetail() {
 
   useEffect(() => { load(); }, [load]);
 
+  const refreshUnitState = useCallback(async () => {
+    try {
+      const { body } = await api<{ unit: Unit; content: string }>(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`);
+      setUnit(body.unit);
+      if (body.unit.kind === "pod") {
+        const all = await api<{ units?: Unit[] }>("/api/units");
+        setMembers((all.body.units || []).filter((u) => u.scope === scope && u.pod === name));
+      }
+    } catch {
+      // Keep the last visible state; explicit actions still surface errors.
+    }
+  }, [api, name, scope]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (!document.hidden) refreshUnitState();
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [refreshUnitState]);
+
   async function lifecycle(action: string) {
     if (!unit) return;
+    if (acting) return;
+    if (action === "stop" && cls === "running" && !confirm(`Stop ${unit.name}?`)) return;
+    setActing(action);
     try {
       await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/action`, { method: "POST", body: JSON.stringify({ action }) });
       toast(`${action}: ok`);
       load();
     } catch (e) {
       toast(`${action}: ${(e as Error).message}`, true);
+    } finally {
+      setActing("");
     }
   }
 
@@ -804,7 +1011,7 @@ function UnitDetail() {
       title={unit.name}
       kicker={`${unit.kind} · ${scopeKind} · ${unit.scope}`}
       back={<Link className="btn icon-only" to="/units"><ChevronLeft size={18} /></Link>}
-      action={!auth.readOnly && <div className="action-row"><button className="btn" onClick={() => lifecycle("start")}><Play size={16} /> Start</button><button className="btn" onClick={() => lifecycle("stop")}><CircleStop size={16} /> Stop</button><button className="btn" onClick={() => lifecycle("restart")}><RefreshCw size={16} /> Restart</button></div>}
+      action={!auth.readOnly && <div className="action-row"><button className="btn" disabled={!!acting} onClick={() => lifecycle("start")}>{acting === "start" ? <RefreshCw className="spin" size={16} /> : <Play size={16} />} Start</button><button className="btn" disabled={!!acting} onClick={() => lifecycle("stop")}>{acting === "stop" ? <RefreshCw className="spin" size={16} /> : <CircleStop size={16} />} Stop</button><button className="btn" disabled={!!acting} onClick={() => lifecycle("restart")}>{acting === "restart" ? <RefreshCw className="spin" size={16} /> : <RefreshCw size={16} />} Restart</button></div>}
     >
       <div className="detail-summary">
         <StatusBadge state={cls} label={stateLabel(unit)} />
@@ -830,7 +1037,7 @@ function UnitDetail() {
           onSave={save}
         />
       )}
-      {tab === "logs" && <LogsTab scope={scope} name={name} />}
+      {tab === "logs" && <LogsTab scope={scope} name={name} aggregateMembers={unit.kind === "pod"} />}
       {tab === "history" && <HistoryTab scope={scope} name={name} currentContent={content} reload={load} />}
       {tab === "members" && <Panel title="Pod members" icon={Boxes}>{members.length ? members.map((u) => <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={load} />) : <p className="muted">No container units declare Pod={name} yet.</p>}</Panel>}
       {tab === "actions" && <ActionsTab unit={unit} onAction={lifecycle} onDelete={deleteUnit} />}
@@ -862,6 +1069,9 @@ function OverviewTab({ unit, members }: { unit: Unit; members: Unit[] }) {
           ["Scope user", unit.scopeUser || "n/a"],
           ["Image", unit.image || "n/a"],
           ["Restarts", String(unit.restarts || 0)],
+          ["Health", unit.health || "n/a"],
+          ["CPU", unit.stats ? `${(unit.stats.cpuPct || 0).toFixed(1)}%` : "n/a"],
+          ["Memory", unit.stats?.memBytes ? fmtBytes(unit.stats.memBytes) : "n/a"],
           ["Pod", unit.pod || "n/a"],
         ]} />
       </Panel>
@@ -891,6 +1101,17 @@ function EditorTab({ unit, content, setContent, savedContent, validation, change
   const [restart, setRestart] = useState(false);
   const [review, setReview] = useState(false);
   const readOnly = auth.readOnly || unit.readOnly;
+  useDirtyGuard(changed);
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s" && !readOnly) {
+        ev.preventDefault();
+        if (changed) setReview(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [changed, readOnly]);
   const gpuSnippets: Record<string, string[]> = {
     nvidia: ["AddDevice=nvidia.com/gpu=all"],
     vaapi: ["AddDevice=/dev/dri"],
@@ -912,7 +1133,7 @@ function EditorTab({ unit, content, setContent, savedContent, validation, change
           </select>
         )}
       </div>
-      <textarea className="code-editor" spellCheck={false} readOnly={readOnly} value={content} onChange={(e) => setContent(e.target.value)} />
+      <CodeEditor value={content} onChange={setContent} readOnly={readOnly} onSave={() => changed && setReview(true)} />
       {validation && <ValidationBlock validation={validation.validation} hints={validation.hints || []} />}
       {review && (
         <div className="review-box">
@@ -938,37 +1159,96 @@ function DiffView({ before, after }: { before: string; after: string }) {
   return <pre className="output diff">{lineDiff(before, after).map(([op, line], i) => <span key={i} className={op === "+" ? "diff-add" : op === "-" ? "diff-del" : "diff-ctx"}>{op} {line}{"\n"}</span>)}</pre>;
 }
 
-function LogsTab({ scope, name }: { scope: string; name: string }) {
+function LogsTab({ scope, name, aggregateMembers = false }: { scope: string; name: string; aggregateMembers?: boolean }) {
   const [follow, setFollow] = useState(true);
-  const [lines, setLines] = useState("");
+  const [tail, setTail] = useState(200);
+  const [since, setSince] = useState("");
+  const [showTimestamps, setShowTimestamps] = useState(true);
+  const [filter, setFilter] = useState("");
+  const [lines, setLines] = useState<string[]>([]);
+  const [streamState, setStreamState] = useState("connecting");
   const ref = useRef<HTMLPreElement | null>(null);
 
   useEffect(() => {
-    setLines("");
-    const src = new EventSource(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/logs?follow=${follow ? "1" : "0"}&lines=200`);
-    src.onmessage = (ev) => {
-      let line = ev.data;
-      try {
-        const j = JSON.parse(ev.data);
-        const ts = j.__REALTIME_TIMESTAMP ? new Date(j.__REALTIME_TIMESTAMP / 1000).toLocaleTimeString() : "";
-        const msg = typeof j.MESSAGE === "string" ? j.MESSAGE : JSON.stringify(j.MESSAGE);
-        line = `${ts}  ${msg}`;
-      } catch {
-        // Show raw line.
-      }
-      setLines((prev) => `${prev}${line}\n`);
+    let src: EventSource | null = null;
+    let timer = 0;
+    let backoff = 1000;
+    let cancelled = false;
+    setLines([]);
+    function connect() {
+      if (cancelled) return;
+      setStreamState("connecting");
+      const q = new URLSearchParams({ follow: follow ? "1" : "0", lines: String(tail) });
+      if (since.trim()) q.set("since", since.trim());
+      if (aggregateMembers) q.set("members", "1");
+      src = new EventSource(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/logs?${q}`);
+      src.onopen = () => {
+        setStreamState(follow ? "live" : "loaded");
+        backoff = 1000;
+      };
+      src.onmessage = (ev) => {
+        let line = ev.data;
+        try {
+          const j = JSON.parse(ev.data);
+          const ts = j.__REALTIME_TIMESTAMP ? new Date(Number(j.__REALTIME_TIMESTAMP) / 1000).toLocaleString() : "";
+          const msg = typeof j.MESSAGE === "string" ? j.MESSAGE : JSON.stringify(j.MESSAGE);
+          line = showTimestamps && ts ? `${ts}  ${msg}` : msg;
+        } catch {
+          // Show raw line.
+        }
+        setLines((prev) => [...prev, line].slice(-5000));
+      };
+      src.onerror = () => {
+        src?.close();
+        if (!follow || cancelled) {
+          setStreamState("loaded");
+          return;
+        }
+        setStreamState("stream lost - reconnecting");
+        timer = window.setTimeout(connect, backoff);
+        backoff = Math.min(backoff * 2, 15000);
+      };
+    }
+    connect();
+    return () => {
+      cancelled = true;
+      src?.close();
+      window.clearTimeout(timer);
     };
-    src.onerror = () => { if (!follow) src.close(); };
-    return () => src.close();
-  }, [follow, name, scope]);
+  }, [aggregateMembers, follow, name, scope, showTimestamps, since, tail]);
 
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [lines]);
 
+  const visible = useMemo(() => {
+    const needle = filter.toLowerCase();
+    return needle ? lines.filter((line) => line.toLowerCase().includes(needle)) : lines;
+  }, [filter, lines]);
+  const text = visible.join("\n") + (visible.length ? "\n" : "");
+
+  function download() {
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
-    <Panel title="Logs" icon={Logs} action={<label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow</label>}>
-      <pre ref={ref} className="output logs-output">{lines || "connecting..."}</pre>
+    <Panel title="Logs" icon={Logs} action={<span className="badge">{streamState}</span>}>
+      <div className="filterbar">
+        <label className="searchbox"><Search size={16} /><input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter logs..." /></label>
+        <select className="input" value={tail} onChange={(e) => setTail(Number(e.target.value))}><option value={200}>200 lines</option><option value={1000}>1000 lines</option><option value={5000}>5000 lines</option></select>
+        <input className="input" placeholder="since, e.g. 1 hour ago" value={since} onChange={(e) => setSince(e.target.value)} />
+        <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow</label>
+        <label className="check"><input type="checkbox" checked={showTimestamps} onChange={(e) => setShowTimestamps(e.target.checked)} /> timestamps</label>
+        <button className="btn btn-sm" onClick={() => navigator.clipboard.writeText(text)}><Check size={14} /> Copy</button>
+        <button className="btn btn-sm" onClick={download}><Download size={14} /> Download</button>
+      </div>
+      <pre ref={ref} className="output logs-output">{text || "connecting..."}</pre>
     </Panel>
   );
 }
@@ -1068,6 +1348,8 @@ function FleetView() {
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [license, setLicense] = useState<LicenseStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [newNodeID, setNewNodeID] = useState("");
+  const [newNodeTarget, setNewNodeTarget] = useState("");
   const load = useCallback(async () => {
     try {
       const { body } = await api<{ nodes?: ManagedNode[]; license?: LicenseStatus }>("/api/nodes");
@@ -1084,6 +1366,17 @@ function FleetView() {
   useEffect(() => { load(); }, [load]);
   const totalUnits = nodes.reduce((sum, n) => sum + n.units, 0);
   const failed = nodes.reduce((sum, n) => sum + n.failed, 0);
+  async function addNode() {
+    try {
+      await api("/api/nodes", { method: "POST", body: JSON.stringify({ id: newNodeID, target: newNodeTarget }) });
+      setNewNodeID("");
+      setNewNodeTarget("");
+      toast("remote node added");
+      load();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
   return (
     <Page title="Fleet" kicker="Managed Podman nodes">
       <div className="tiles">
@@ -1094,6 +1387,13 @@ function FleetView() {
         <MetricTile label="edition" value={license?.edition || "unknown"} tone="dim" />
       </div>
       {license?.message && <p className={`banner ${license.enterpriseAvailable ? "" : "banner-warn"}`}>{license.message}</p>}
+      {auth.role === "admin" && !auth.readOnly && <Panel title="Add remote" icon={Plus}>
+        <div className="filterbar">
+          <input className="input" placeholder="node id, e.g. nas" value={newNodeID} onChange={(e) => setNewNodeID(e.target.value)} />
+          <input className="input" placeholder="ssh target, e.g. root@nas.local" value={newNodeTarget} onChange={(e) => setNewNodeTarget(e.target.value)} />
+          <button className="btn btn-accent" disabled={!newNodeID || !newNodeTarget} onClick={addNode}><Plus size={16} /> Add</button>
+        </div>
+      </Panel>}
       <Panel title="Nodes" icon={Network}>
         {loading ? <p className="muted">Loading nodes...</p> : nodes.length ? nodes.map((node) => <NodeRow key={node.id} node={node} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <p className="muted">No managed nodes configured.</p>}
       </Panel>
@@ -1117,12 +1417,23 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
   const scopeText = node.scopes.map((s) => s.system ? `${s.label} (rootful)` : `${s.label} (${s.user || "user"} rootless)`).join(", ");
   const rootful = node.rootful || { units: 0, running: 0, failed: 0, unknown: 0 };
   const rootless = node.rootless || { units: 0, running: 0, failed: 0, unknown: 0 };
+  const memPct = node.metrics?.memTotalKb ? Math.round(100 * (1 - (node.metrics.memAvailKb || 0) / node.metrics.memTotalKb)) : null;
   async function editLabels() {
     const value = prompt(`Labels for ${node.local ? "local" : node.id}`, node.labels?.join(", ") || "");
     if (value == null) return;
     try {
       await api(`/api/nodes/${encodeURIComponent(node.id)}/labels`, { method: "PATCH", body: JSON.stringify({ labels: value.split(",") }) });
       toast("node labels updated");
+      onChanged();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  async function removeNode() {
+    if (!confirm(`Remove remote node ${node.id}?`)) return;
+    try {
+      await api(`/api/nodes/${encodeURIComponent(node.id)}`, { method: "DELETE" });
+      toast("remote node removed");
       onChanged();
     } catch (e) {
       toast((e as Error).message, true);
@@ -1139,11 +1450,15 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
       <span className="grow" />
       <span className="badge">rootful {rootful.units}/{rootful.running}</span>
       <span className="badge badge-user">rootless {rootless.units}/{rootless.running}</span>
+      {node.metrics?.load1 != null && <span className="badge">load {node.metrics.load1.toFixed(2)}</span>}
+      {node.metrics?.cpuPct != null && node.metrics.cpuPct >= 0 && <span className="badge">{node.metrics.cpuPct}% cpu</span>}
+      {memPct != null && <span className="badge">{memPct}% mem</span>}
       <span className="badge">{node.units} units</span>
       <span className="badge badge-running">{node.running} running</span>
       {node.failed > 0 && <span className="badge badge-failed">{node.failed} failed</span>}
       {node.unknown > 0 && <span className="badge">{node.unknown} unknown</span>}
       {editable && <button className="btn btn-sm" onClick={editLabels}><SquarePen size={14} /> labels</button>}
+      {editable && !node.local && <button className="btn btn-sm btn-danger" onClick={removeNode}><Trash2 size={14} /> remove</button>}
     </div>
   );
 }
@@ -1265,6 +1580,8 @@ function NewUnitForm({ onCreated }: { onCreated?: () => void }) {
   const [baseName, setBaseName] = useState("");
   const [content, setContent] = useState(TEMPLATES.container);
   const [validation, setValidation] = useState<{ validation?: ValidationResult; hints?: string[] } | null>(null);
+  const dirty = baseName.trim() !== "" || content !== TEMPLATES[kind];
+  useDirtyGuard(dirty);
 
   useEffect(() => {
     api<HostInfo>("/api/host").then(({ body }) => {
@@ -1307,7 +1624,7 @@ function NewUnitForm({ onCreated }: { onCreated?: () => void }) {
         <select className="input" value={kind} onChange={(e) => changeKind(e.target.value)}>{Object.keys(TEMPLATES).map((k) => <option key={k}>{k}</option>)}</select>
         <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
       </div>
-      <textarea className="code-editor" value={content} spellCheck={false} onChange={(e) => setContent(e.target.value)} />
+      <CodeEditor value={content} onChange={setContent} />
       <button className="btn btn-accent" onClick={create}><Check size={16} /> Validate + create</button>
       {validation && <ValidationBlock validation={validation.validation} hints={validation.hints || []} />}
     </>
@@ -1413,26 +1730,37 @@ function ImportView() {
           </div>
         </div>
       </Panel>
-      {results.length > 0 && <Panel title={`${results.length} generated unit${results.length === 1 ? "" : "s"}`} icon={Boxes}>{results.map((r, i) => <ImportResult key={i} unit={r} scope={scope} />)}</Panel>}
+      {results.length > 0 && <Panel title={`${results.length} generated unit${results.length === 1 ? "" : "s"}`} icon={Boxes}>{results.map((r, i) => <ImportResult key={i} unit={r} scope={scope} sourceContainer={kind === "container" ? input : ""} />)}</Panel>}
     </Page>
   );
 }
 
-function ImportResult({ unit, scope }: { unit: { name: string; content: string; warnings?: string[] }; scope: string }) {
+function ImportResult({ unit, scope, sourceContainer = "" }: { unit: { name: string; content: string; warnings?: string[] }; scope: string; sourceContainer?: string }) {
   const api = useApi();
   const { toast } = useApiContext();
   const [name, setName] = useState(unit.name);
   const [content, setContent] = useState(unit.content);
   const [status, setStatus] = useState<React.ReactNode>(null);
+  const [stopSource, setStopSource] = useState(false);
+  const [startManaged, setStartManaged] = useState(true);
+  const created = !!status;
+  useDirtyGuard(!created && (name !== unit.name || content !== unit.content));
 
-  async function create() {
+  async function create(adopt = false) {
     try {
       const { status: code, body } = await api<{ validation?: ValidationResult; hints?: string[] }>(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ content }) });
       if (code === 422) {
         setStatus(<ValidationBlock validation={body.validation} hints={body.hints || []} />);
         return;
       }
+      if (adopt && stopSource && sourceContainer) {
+        await api(`/api/import/containers/${encodeURIComponent(sourceContainer)}/stop`, { method: "POST", body: "{}" });
+      }
+      if (adopt && startManaged) {
+        await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/action`, { method: "POST", body: JSON.stringify({ action: "start" }) });
+      }
       setStatus(<span>created - <Link to={`/unit/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`}>open {name}</Link></span>);
+      toast(adopt ? `adopted ${name}` : `created ${name}`);
     } catch (e) {
       toast((e as Error).message, true);
     }
@@ -1440,9 +1768,10 @@ function ImportResult({ unit, scope }: { unit: { name: string; content: string; 
 
   return (
     <div className="import-result">
-      <div className="filterbar"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /><button className="btn btn-accent" onClick={create}><Plus size={16} /> Create</button>{status}</div>
+      <div className="filterbar"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /><button className="btn btn-accent" onClick={() => create(false)}><Plus size={16} /> Create</button>{sourceContainer && <button className="btn" onClick={() => create(true)}><Check size={16} /> Adopt</button>}{status}</div>
+      {sourceContainer && <div className="action-row"><label className="check"><input type="checkbox" checked={stopSource} onChange={(e) => setStopSource(e.target.checked)} /> stop original container</label><label className="check"><input type="checkbox" checked={startManaged} onChange={(e) => setStartManaged(e.target.checked)} /> start managed unit</label></div>}
       {unit.warnings?.map((w) => <p className="banner banner-warn" key={w}>{w}</p>)}
-      <textarea className="code-editor small" value={content} onChange={(e) => setContent(e.target.value)} />
+      <CodeEditor value={content} onChange={setContent} small />
     </div>
   );
 }
@@ -1509,6 +1838,23 @@ function UpdatesView() {
     }
   }
 
+  async function updateAll() {
+    if (!available.length || !confirm(`Pull and restart ${available.length} drifted units?`)) return;
+    try {
+      setOperation({ title: "Applying image updates", lines: [`Updating ${available.length} units`, "Pulling images and restarting services"] });
+      const { body } = await api<{ results?: Array<{ ok: boolean; scope: string; name: string; error?: string }> }>("/api/updates/apply", { method: "POST", body: JSON.stringify({ allDrifted: true }) });
+      const results = body.results || [];
+      const failed = results.filter((r) => !r.ok);
+      toast(failed.length ? `updates: ${results.length - failed.length} ok, ${failed.length} failed` : `updated ${results.length} units`, failed.length > 0);
+      setOperation({ title: "Applying image updates", lines: [`${results.length - failed.length} updated`, failed.length ? `${failed.length} failed` : "Refreshing update state"] });
+      await check(false);
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setOperation(null);
+    }
+  }
+
   useEffect(() => { check(false); }, []);
 
   return (
@@ -1520,7 +1866,7 @@ function UpdatesView() {
         <MetricTile label="skipped / errors" value={noted.length} tone={noted.length ? "warn" : "dim"} />
         <MetricTile label="stale images" value={stale?.count || 0} tone={stale?.count ? "warn" : "dim"} />
       </div>
-      <div className="action-row"><button className="btn btn-accent" disabled={!!operation} onClick={() => check()}><RefreshCw size={16} /> Check image updates</button>{summary && <span className="muted">{summary}</span>}{stale?.count ? <button className="btn" disabled={!!operation} onClick={prune}><Trash2 size={16} /> Prune {stale.count} stale ({fmtBytes(stale.bytes)})</button> : null}</div>
+      <div className="action-row"><button className="btn btn-accent" disabled={!!operation} onClick={() => check()}><RefreshCw size={16} /> Check image updates</button>{available.length > 0 && <button className="btn" disabled={!!operation} onClick={updateAll}><Download size={16} /> Update all</button>}{summary && <span className="muted">{summary}</span>}{stale?.count ? <button className="btn" disabled={!!operation} onClick={prune}><Trash2 size={16} /> Prune {stale.count} stale ({fmtBytes(stale.bytes)})</button> : null}</div>
       <Panel title="Available updates" icon={Download}>
         {available.length ? available.map((row) => <UpdateRow key={`${row.scope}/${row.name}`} row={row} after={() => check(false)} busy={!!operation} />) : <p className="muted">No image updates currently flagged.</p>}
       </Panel>
@@ -1648,24 +1994,94 @@ type SettingItem = { key: string; label: string; value: unknown; source: string;
 type SettingGroup = { name: string; items: SettingItem[] };
 
 function SettingsView({ host }: { host: HostInfo | null }) {
-  const [tab, setTab] = useState("Users");
+  const { auth } = useApiContext();
+  const tabs = auth.readOnly && auth.role !== "admin" ? ["Account"] : ["Account", "Users", "Authentication", "Deployment", "Backup", "Audit", "About"];
+  const [tab, setTab] = useState(tabs[0]);
   return (
     <Page title="Settings" kicker="Accounts, authentication, and deployment">
       <div className="tabs">
-        {["Users", "Authentication", "Deployment", "Backup", "Audit", "About"].map((name) => <button key={name} className={`tab ${tab === name ? "active" : ""}`} onClick={() => setTab(name)}>{name}</button>)}
+        {tabs.map((name) => <button key={name} className={`tab ${tab === name ? "active" : ""}`} onClick={() => setTab(name)}>{name}</button>)}
       </div>
+      {tab === "Account" && <AccountSettings />}
       {tab === "Users" && <UsersSettings />}
       {tab === "Backup" && <BackupSettings />}
       {tab === "Audit" && <AuditSettings />}
-      {tab !== "Users" && tab !== "Backup" && tab !== "Audit" && <AppSettings tab={tab} host={host} />}
+      {tab !== "Account" && tab !== "Users" && tab !== "Backup" && tab !== "Audit" && <AppSettings tab={tab} host={host} />}
     </Page>
   );
 }
 
+function AccountSettings() {
+  const api = useApi();
+  const { auth, toast } = useApiContext();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [repeat, setRepeat] = useState("");
+  async function changePassword(ev: FormEvent) {
+    ev.preventDefault();
+    if (newPassword !== repeat) {
+      toast("new passwords do not match", true);
+      return;
+    }
+    try {
+      await api("/api/me/password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) });
+      setCurrentPassword("");
+      setNewPassword("");
+      setRepeat("");
+      toast("password changed");
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  return (
+    <Panel title="Account" icon={UserRound}>
+      <InfoGrid rows={[["username", auth.username || "anonymous"], ["role", auth.role || (auth.readOnly ? "share" : "admin")]]} />
+      {auth.username ? (
+        <form className="stack-form account-password-form" onSubmit={changePassword}>
+          <input className="input" type="password" autoComplete="current-password" placeholder="Current password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+          <input className="input" type="password" autoComplete="new-password" placeholder="New password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+          <input className="input" type="password" autoComplete="new-password" placeholder="Repeat new password" value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+          <button className="btn btn-accent"><KeyRound size={16} /> Change password</button>
+        </form>
+      ) : <p className="muted">Share-link sessions cannot change account settings.</p>}
+    </Panel>
+  );
+}
+
 function BackupSettings() {
+  const api = useApi();
+  const { toast } = useApiContext();
+  const [file, setFile] = useState<File | null>(null);
+  const [changes, setChanges] = useState<Array<{ path: string; scope?: string; name?: string; action: string }>>([]);
+  async function preview() {
+    if (!file) return;
+    try {
+      const { body } = await api<{ changes?: typeof changes }>("/api/restore?dryRun=1", { method: "POST", body: file, headers: { "Content-Type": "application/gzip" } });
+      setChanges(body.changes || []);
+      toast("restore preview loaded");
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
+  async function restore() {
+    if (!file || !changes.length || !confirm(`Restore ${changes.length} items from ${file.name}?`)) return;
+    try {
+      const { body } = await api<{ changes?: typeof changes }>("/api/restore", { method: "POST", body: file, headers: { "Content-Type": "application/gzip" } });
+      setChanges(body.changes || []);
+      toast("backup restored");
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  }
   return (
     <Panel title="Backup" icon={Download} action={<a className="btn btn-accent" href="/api/backup"><Download size={16} /> Download</a>}>
       <p className="muted">Export Rookery metadata and managed Quadlet files as a tar.gz archive.</p>
+      <div className="filterbar">
+        <input className="input" type="file" accept=".gz,.tgz,.tar.gz,application/gzip" onChange={(e) => { setFile(e.target.files?.[0] || null); setChanges([]); }} />
+        <button className="btn" disabled={!file} onClick={preview}><Upload size={16} /> Preview restore</button>
+        <button className="btn btn-danger" disabled={!file || !changes.length} onClick={restore}><RefreshCw size={16} /> Confirm restore</button>
+      </div>
+      {changes.length > 0 && <div className="settings-list">{changes.map((c) => <div className="history-row" key={c.path}><span className="grow"><code>{c.path}</code></span><span className={`badge ${c.action === "overwrite" ? "badge-warn" : ""}`}>{c.action}</span></div>)}</div>}
     </Panel>
   );
 }

@@ -17,8 +17,11 @@ import (
 // user's session (rootful Rookery), journal fields are matched directly
 // since `journalctl --user` cannot cross users; for remote scopes the
 // whole command runs over ssh as the target account.
-func Command(ctx context.Context, scope systemd.Scope, unit string, lines int, follow bool) (*exec.Cmd, error) {
+func Command(ctx context.Context, scope systemd.Scope, unit string, lines int, follow bool, since string) (*exec.Cmd, error) {
 	args := []string{"-o", "json", "--no-pager", "-n", fmt.Sprint(lines)}
+	if since != "" {
+		args = append(args, "--since", since)
+	}
 	if follow {
 		args = append(args, "-f")
 	}

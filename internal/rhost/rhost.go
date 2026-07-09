@@ -9,12 +9,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/tobagin/rookery/internal/hostinfo"
 )
 
 // SSHCommand is the ssh invocation prefix. BatchMode keeps a missing key or
@@ -199,6 +202,95 @@ func ImageDigests(ctx context.Context, target string, userSession bool, image st
 func PullImage(ctx context.Context, target string, userSession bool, image string) error {
 	_, err := Run(ctx, target, Script(userSession, []string{"podman", "pull", "-q", image}), nil)
 	return err
+}
+
+func Metrics(ctx context.Context, target string) (hostinfo.Metrics, error) {
+	script := `python3 - <<'PY'
+import json, os, platform
+m={"hostname":platform.node(),"kernel":platform.release(),"cores":os.cpu_count() or 0,"cpuPct":-1,"load1":0,"memTotalKb":0,"memAvailKb":0,"uptimeSeconds":0}
+try:
+  m["load1"]=float(open("/proc/loadavg").read().split()[0])
+except Exception: pass
+try:
+  m["uptimeSeconds"]=int(float(open("/proc/uptime").read().split()[0]))
+except Exception: pass
+try:
+  for line in open("/proc/meminfo"):
+    k,v=line.split(":",1); n=int(v.split()[0])
+    if k=="MemTotal": m["memTotalKb"]=n
+    if k=="MemAvailable": m["memAvailKb"]=n
+except Exception: pass
+print(json.dumps(m))
+PY`
+	out, err := Run(ctx, target, script, nil)
+	if err != nil {
+		return hostinfo.Metrics{}, err
+	}
+	var m hostinfo.Metrics
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		return hostinfo.Metrics{}, err
+	}
+	return m, nil
+}
+
+type ContainerRuntime struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Service  string  `json:"service"`
+	CPUPct   float64 `json:"cpuPct"`
+	MemBytes int64   `json:"memBytes"`
+	Health   string  `json:"health,omitempty"`
+}
+
+func ContainerStats(ctx context.Context, target string, userSession bool) ([]ContainerRuntime, error) {
+	script := Script(userSession, []string{"sh", "-c", `python3 - <<'PY'
+import json, subprocess
+def run(args):
+  try: return subprocess.check_output(args, text=True, stderr=subprocess.DEVNULL)
+  except Exception: return ""
+stats={}
+for line in run(["podman","stats","--no-stream","--format","json"]).splitlines():
+  try:
+    row=json.loads(line)
+    cid=row.get("ContainerID") or row.get("ID") or row.get("id") or ""
+    name=row.get("Name") or row.get("name") or ""
+    cpu=str(row.get("CPU") or row.get("CPUPerc") or "0").strip().rstrip("%")
+    mem=str(row.get("MemUsage") or row.get("MemUsageBytes") or "0").split("/")[0].strip().split()
+    mult={"KB":1024,"KIB":1024,"MB":1048576,"MIB":1048576,"GB":1073741824,"GIB":1073741824}
+    mb=float(mem[0]) if mem else 0
+    unit=mem[1].upper() if len(mem)>1 else ""
+    stats[cid or name]={"id":cid,"name":name,"cpuPct":float(cpu or 0),"memBytes":int(mb*mult.get(unit,1))}
+  except Exception: pass
+out=[]
+for line in run(["podman","ps","--all","--format","json"]).splitlines():
+  try:
+    row=json.loads(line)
+    cid=row.get("Id") or row.get("ID") or row.get("id") or ""
+    names=row.get("Names") or []
+    name=names[0] if isinstance(names,list) and names else (row.get("Names") or row.get("Name") or cid)
+    labels=row.get("Labels") or {}
+    svc=labels.get("PODMAN_SYSTEMD_UNIT") or ""
+    if not svc: continue
+    item=stats.get(cid) or stats.get(name) or {"id":cid,"name":name,"cpuPct":0,"memBytes":0}
+    item["service"]=svc
+    inspect=run(["podman","inspect",cid or name])
+    try:
+      raw=json.loads(inspect); obj=raw[0] if isinstance(raw,list) else raw
+      item["health"]=(((obj.get("State") or {}).get("Health") or {}).get("Status") or "")
+    except Exception: pass
+    out.append(item)
+  except Exception: pass
+print(json.dumps(out))
+PY`})
+	out, err := Run(ctx, target, script, nil)
+	if err != nil {
+		return nil, err
+	}
+	var rows []ContainerRuntime
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // Probe identifies the ssh account on target: uid decides whether Rookery

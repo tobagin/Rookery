@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -113,6 +115,13 @@ type ContainerSummary struct {
 	Labels  map[string]string `json:"Labels"`
 }
 
+type ContainerStats struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	CPUPct   float64 `json:"cpuPct"`
+	MemBytes int64   `json:"memBytes"`
+}
+
 // Name returns the primary container name.
 func (c ContainerSummary) Name() string {
 	if len(c.Names) > 0 {
@@ -142,6 +151,28 @@ func (c *Client) Containers(ctx context.Context) ([]ContainerSummary, error) {
 	return out, nil
 }
 
+func (c *Client) Stats(ctx context.Context) ([]ContainerStats, error) {
+	resp, err := c.get(ctx, "/containers/stats?stream=false")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var raw []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	out := []ContainerStats{}
+	for _, row := range raw {
+		out = append(out, ContainerStats{
+			ID:       firstString(row, "ContainerID", "ID", "Id", "id"),
+			Name:     firstString(row, "Name", "name"),
+			CPUPct:   percentValue(row["CPU"], row["CPUPerc"], row["cpu_percent"]),
+			MemBytes: int64(numberValue(row["MemUsage"], row["MemUsageBytes"], row["mem_usage"])),
+		})
+	}
+	return out, nil
+}
+
 // InspectContainer returns the raw inspect JSON for a container; the
 // convert package extracts what it needs from it.
 func (c *Client) InspectContainer(ctx context.Context, nameOrID string) ([]byte, error) {
@@ -151,6 +182,76 @@ func (c *Client) InspectContainer(ctx context.Context, nameOrID string) ([]byte,
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
+}
+
+func (c *Client) StopContainer(ctx context.Context, nameOrID string) error {
+	u := "http://d/v5.0.0/libpod/containers/" + url.PathEscape(nameOrID) + "/stop"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotModified {
+		return fmt.Errorf("podman stop %s: %s: %s", nameOrID, resp.Status, apiErrorBody(resp.Body))
+	}
+	return nil
+}
+
+func firstString(row map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := row[k].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+func percentValue(values ...any) float64 {
+	for _, v := range values {
+		switch x := v.(type) {
+		case float64:
+			return x
+		case string:
+			x = strings.TrimSpace(strings.TrimSuffix(x, "%"))
+			f, _ := strconv.ParseFloat(x, 64)
+			return f
+		}
+	}
+	return 0
+}
+
+func numberValue(values ...any) float64 {
+	for _, v := range values {
+		switch x := v.(type) {
+		case float64:
+			return x
+		case string:
+			parts := strings.Split(x, "/")
+			fields := strings.Fields(strings.TrimSpace(parts[0]))
+			if len(fields) == 0 {
+				return 0
+			}
+			f, _ := strconv.ParseFloat(fields[0], 64)
+			unit := ""
+			if len(fields) > 1 {
+				unit = strings.ToUpper(strings.TrimSuffix(fields[1], "B"))
+			}
+			switch unit {
+			case "K", "KI", "KB", "KIB":
+				f *= 1024
+			case "M", "MI", "MB", "MIB":
+				f *= 1024 * 1024
+			case "G", "GI", "GB", "GIB":
+				f *= 1024 * 1024 * 1024
+			}
+			return f
+		}
+	}
+	return 0
 }
 
 // ImageDigests returns every digest the local store associates with ref

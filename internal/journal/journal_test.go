@@ -9,7 +9,7 @@ import (
 )
 
 func TestCommandSystem(t *testing.T) {
-	cmd, err := Command(context.Background(), systemd.Scope{}, "web.service", 100, true)
+	cmd, err := Command(context.Background(), systemd.Scope{}, "web.service", 100, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestCommandSystem(t *testing.T) {
 }
 
 func TestCommandRemote(t *testing.T) {
-	cmd, err := Command(context.Background(), systemd.Scope{User: "bob", SSH: "bob@nas"}, "web.service", 50, false)
+	cmd, err := Command(context.Background(), systemd.Scope{User: "bob", SSH: "bob@nas"}, "web.service", 50, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

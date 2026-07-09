@@ -17,31 +17,44 @@ import (
 	"github.com/tobagin/rookery/internal/hostinfo"
 	"github.com/tobagin/rookery/internal/journal"
 	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/tobagin/rookery/internal/rhost"
 	"github.com/tobagin/rookery/internal/systemd"
 )
 
 // unitJSON is one unit as the API reports it: the file on disk plus live
 // systemd state.
 type unitJSON struct {
-	Name        string   `json:"name"`
-	Kind        string   `json:"kind"`
-	Scope       string   `json:"scope"`
-	ScopeKind   string   `json:"scopeKind"`
-	ScopeUser   string   `json:"scopeUser,omitempty"`
-	Service     string   `json:"service"`
-	Path        string   `json:"path"`
-	ReadOnly    bool     `json:"readOnly"`
-	Description string   `json:"description,omitempty"`
-	Image       string   `json:"image,omitempty"`
-	Pod         string   `json:"pod,omitempty"` // Pod= reference, e.g. "immich.pod"
-	Load        string   `json:"load"`
-	Active      string   `json:"active"`
-	Sub         string   `json:"sub"`
-	UnitFile    string   `json:"unitFile"`
-	Result      string   `json:"result,omitempty"`
-	ExitCode    int      `json:"exitCode"`
-	Restarts    int      `json:"restarts"`
-	GPUs        []string `json:"gpus,omitempty"`
+	Name        string     `json:"name"`
+	Kind        string     `json:"kind"`
+	Scope       string     `json:"scope"`
+	ScopeKind   string     `json:"scopeKind"`
+	ScopeUser   string     `json:"scopeUser,omitempty"`
+	Service     string     `json:"service"`
+	Path        string     `json:"path"`
+	ReadOnly    bool       `json:"readOnly"`
+	Description string     `json:"description,omitempty"`
+	Image       string     `json:"image,omitempty"`
+	Pod         string     `json:"pod,omitempty"` // Pod= reference, e.g. "immich.pod"
+	Load        string     `json:"load"`
+	Active      string     `json:"active"`
+	Sub         string     `json:"sub"`
+	UnitFile    string     `json:"unitFile"`
+	Result      string     `json:"result,omitempty"`
+	ExitCode    int        `json:"exitCode"`
+	Restarts    int        `json:"restarts"`
+	GPUs        []string   `json:"gpus,omitempty"`
+	Stats       *unitStats `json:"stats,omitempty"`
+	Health      string     `json:"health,omitempty"`
+}
+
+type unitStats struct {
+	CPUPct   float64 `json:"cpuPct"`
+	MemBytes int64   `json:"memBytes"`
+}
+
+type unitRuntime struct {
+	Stats  *unitStats
+	Health string
 }
 
 func (u *unitJSON) fillStatus(st systemd.UnitStatus) {
@@ -69,6 +82,7 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 			scopeErrors[area.Label] = err.Error()
 			statuses = nil
 		}
+		runtime := s.runtimeByService(r.Context(), area)
 		for i, d := range found {
 			scopeKind := "rootless"
 			if area.Scope.IsSystem() {
@@ -87,6 +101,10 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 			}
 			if i < len(statuses) {
 				uj.fillStatus(statuses[i])
+			}
+			if rt, ok := runtime[services[i]]; ok {
+				uj.Stats = rt.Stats
+				uj.Health = rt.Health
 			}
 			if f, err := quadlet.Parse(d.data); d.data != nil && err == nil {
 				uj.Description, _ = f.Get("Unit", "Description")
@@ -159,7 +177,98 @@ func (s *Server) unitJSONFor(r *http.Request, area Area, name, path string) unit
 	if statuses, err := s.sysd.Status(r.Context(), area.Scope, []string{service}); err == nil && len(statuses) == 1 {
 		uj.fillStatus(statuses[0])
 	}
+	if rt, ok := s.runtimeByService(r.Context(), area)[service]; ok {
+		uj.Stats = rt.Stats
+		uj.Health = rt.Health
+	}
 	return uj
+}
+
+func (s *Server) runtimeByService(ctx context.Context, area Area) map[string]unitRuntime {
+	out := map[string]unitRuntime{}
+	if area.Remote() {
+		rows, err := rhost.ContainerStats(ctx, area.Scope.SSH, area.Scope.User != "")
+		if err != nil {
+			return out
+		}
+		for _, row := range rows {
+			if row.Service == "" {
+				continue
+			}
+			out[row.Service] = unitRuntime{Stats: &unitStats{CPUPct: row.CPUPct, MemBytes: row.MemBytes}, Health: row.Health}
+		}
+		return out
+	}
+	if s.pod == nil {
+		return out
+	}
+	containers, err := s.pod.Containers(ctx)
+	if err != nil {
+		return out
+	}
+	statsRows, _ := s.pod.Stats(ctx)
+	stats := map[string]unitStats{}
+	for _, row := range statsRows {
+		st := unitStats{CPUPct: row.CPUPct, MemBytes: row.MemBytes}
+		if row.ID != "" {
+			stats[row.ID] = st
+		}
+		if row.Name != "" {
+			stats[row.Name] = st
+		}
+	}
+	for _, c := range containers {
+		service := c.Labels["PODMAN_SYSTEMD_UNIT"]
+		if service == "" {
+			continue
+		}
+		rt := unitRuntime{}
+		if st, ok := stats[c.ID]; ok {
+			rt.Stats = &st
+		} else if st, ok := stats[c.Name()]; ok {
+			rt.Stats = &st
+		}
+		if raw, err := s.pod.InspectContainer(ctx, c.ID); err == nil {
+			rt.Health = inspectHealth(raw)
+		}
+		out[service] = rt
+	}
+	return out
+}
+
+func inspectHealth(raw []byte) string {
+	var obj map[string]any
+	if strings.HasPrefix(strings.TrimSpace(string(raw)), "[") {
+		var list []map[string]any
+		if json.Unmarshal(raw, &list) != nil || len(list) == 0 {
+			return ""
+		}
+		obj = list[0]
+	} else if json.Unmarshal(raw, &obj) != nil {
+		return ""
+	}
+	state, _ := obj["State"].(map[string]any)
+	health, _ := state["Health"].(map[string]any)
+	status, _ := health["Status"].(string)
+	return status
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	out := map[string]unitStats{}
+	for _, area := range s.areas {
+		found, err := discoverArea(r.Context(), area)
+		if err != nil {
+			continue
+		}
+		runtime := s.runtimeByService(r.Context(), area)
+		for _, d := range found {
+			service, _ := quadlet.ServiceName(d.unit.Name)
+			if rt, ok := runtime[service]; ok && rt.Stats != nil {
+				out[area.Label+"/"+d.unit.Name] = *rt.Stats
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stats": out})
 }
 
 func (s *Server) handleGetUnit(w http.ResponseWriter, r *http.Request) {
@@ -458,6 +567,70 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"unit": s.unitJSONFor(r, area, name, path)})
 }
 
+type unitRef struct {
+	Scope string `json:"scope"`
+	Name  string `json:"name"`
+}
+
+type bulkResult struct {
+	Scope string `json:"scope"`
+	Name  string `json:"name"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+func (s *Server) handleBulkAction(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Action string    `json:"action"`
+		Units  []unitRef `json:"units"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if req.Action != "start" && req.Action != "stop" && req.Action != "restart" {
+		httpError(w, http.StatusBadRequest, "bulk action must be start, stop, or restart")
+		return
+	}
+	if len(req.Units) == 0 {
+		httpError(w, http.StatusBadRequest, "no units selected")
+		return
+	}
+	results := make([]bulkResult, 0, len(req.Units))
+	for _, ref := range req.Units {
+		res := bulkResult{Scope: ref.Scope, Name: ref.Name}
+		area, found := s.area(ref.Scope)
+		if !found {
+			res.Error = "unknown scope"
+			results = append(results, res)
+			continue
+		}
+		if err := quadlet.CheckName(ref.Name); err != nil {
+			res.Error = err.Error()
+			results = append(results, res)
+			continue
+		}
+		service, _ := quadlet.ServiceName(ref.Name)
+		var err error
+		switch req.Action {
+		case "start":
+			err = s.sysd.Start(r.Context(), area.Scope, service)
+		case "stop":
+			err = s.sysd.Stop(r.Context(), area.Scope, service)
+		case "restart":
+			err = s.sysd.Restart(r.Context(), area.Scope, service)
+		}
+		if err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+		}
+		results = append(results, res)
+	}
+	s.audit(r, "unit.bulk."+req.Action, "units", map[string]any{"units": req.Units, "results": results})
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
 func (s *Server) setQuadletInstall(w http.ResponseWriter, r *http.Request, area Area, name, path string, enabled bool) {
 	if filepath.Dir(path) != area.Dirs[0] {
 		httpError(w, http.StatusConflict, "unit lives in a read-only directory")
@@ -649,6 +822,24 @@ func (s *Server) handleImportContainers(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"containers": rows})
 }
 
+func (s *Server) handleStopImportContainer(w http.ResponseWriter, r *http.Request) {
+	if s.pod == nil {
+		httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		httpError(w, http.StatusBadRequest, "missing container id")
+		return
+	}
+	if err := s.pod.StopContainer(r.Context(), id); err != nil {
+		httpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.audit(r, "container.stop", id, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"stopped": id})
+}
+
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	area, name, _, exists, ok := s.resolveUnit(w, r)
 	if !ok {
@@ -668,9 +859,14 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		lines = n
 	}
 	follow := r.URL.Query().Get("follow") == "1"
+	since := strings.TrimSpace(r.URL.Query().Get("since"))
+	if r.URL.Query().Get("members") == "1" && quadlet.KindFromName(name) == quadlet.KindPod {
+		s.handlePodMemberLogs(w, r, area, name, lines, follow, since)
+		return
+	}
 
 	service, _ := quadlet.ServiceName(name)
-	cmd, err := journal.Command(r.Context(), area.Scope, service, lines, follow)
+	cmd, err := journal.Command(r.Context(), area.Scope, service, lines, follow, since)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -698,6 +894,82 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 	// Request context cancellation kills journalctl and ends the scan.
+}
+
+func (s *Server) handlePodMemberLogs(w http.ResponseWriter, r *http.Request, area Area, podName string, lines int, follow bool, since string) {
+	flusher, canFlush := w.(http.Flusher)
+	if !canFlush {
+		httpError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	found, err := discoverArea(r.Context(), area)
+	if err != nil {
+		httpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	type member struct {
+		name    string
+		service string
+	}
+	var members []member
+	for _, d := range found {
+		if d.data == nil || d.unit.Kind != quadlet.KindContainer {
+			continue
+		}
+		f, err := quadlet.Parse(d.data)
+		if err != nil {
+			continue
+		}
+		if pod, ok := f.Get("Container", "Pod"); ok && pod == podName {
+			service, _ := quadlet.ServiceName(d.unit.Name)
+			members = append(members, member{name: d.unit.Name, service: service})
+		}
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+	if len(members) == 0 {
+		return
+	}
+	type line struct {
+		member string
+		data   string
+	}
+	ch := make(chan line)
+	var wg sync.WaitGroup
+	for _, m := range members {
+		cmd, err := journal.Command(r.Context(), area.Scope, m.service, lines, follow, since)
+		if err != nil {
+			continue
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil || cmd.Start() != nil {
+			continue
+		}
+		wg.Add(1)
+		go func(m member) {
+			defer wg.Done()
+			defer cmd.Wait()
+			scanner := bufio.NewScanner(stdout)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for scanner.Scan() {
+				select {
+				case ch <- line{member: m.name, data: string(scanner.Bytes())}:
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}(m)
+	}
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+	for l := range ch {
+		fmt.Fprintf(w, "data: %s: %s\n\n", l.member, l.data)
+		flusher.Flush()
+	}
 }
 
 // handleGPUs inventories local GPUs plus one ssh probe per distinct remote

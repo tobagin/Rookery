@@ -44,7 +44,9 @@ type ValidateFunc func(ctx context.Context, userScope bool, fileName, content st
 type Podman interface {
 	Info(ctx context.Context) (*podman.Info, error)
 	Containers(ctx context.Context) ([]podman.ContainerSummary, error)
+	Stats(ctx context.Context) ([]podman.ContainerStats, error)
 	InspectContainer(ctx context.Context, nameOrID string) ([]byte, error)
+	StopContainer(ctx context.Context, nameOrID string) error
 	ImageDigests(ctx context.Context, ref string) ([]string, error)
 	PullImage(ctx context.Context, ref string) error
 }
@@ -180,9 +182,13 @@ func New(opts Options) *Server {
 			return gpu.ParseRemoteProbe(out)
 		}
 	}
+	if s.users != nil {
+		s.sess.useDB(s.users.DB())
+	}
 	s.mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/onboarding", s.handleOnboarding)
+	s.mux.HandleFunc("POST /api/me/password", s.handleChangeMyPassword)
 	s.mux.HandleFunc("GET /api/oidc/login", s.handleOIDCLogin)
 	s.mux.HandleFunc("GET /api/oidc/callback", s.handleOIDCCallback)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
@@ -198,8 +204,11 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	s.mux.HandleFunc("GET /api/audit", s.handleAuditEvents)
 	s.mux.HandleFunc("GET /api/backup", s.handleBackup)
+	s.mux.HandleFunc("POST /api/restore", s.handleRestore)
 	s.mux.HandleFunc("GET /api/license", s.handleLicense)
 	s.mux.HandleFunc("GET /api/nodes", s.handleNodes)
+	s.mux.HandleFunc("POST /api/nodes", s.handleAddNode)
+	s.mux.HandleFunc("DELETE /api/nodes/{id}", s.handleDeleteNode)
 	s.mux.HandleFunc("GET /api/groups", s.handleNodeGroups)
 	s.mux.HandleFunc("PATCH /api/nodes/{id}/labels", s.handleNodeLabels)
 	s.mux.HandleFunc("GET /api/policies", s.handlePolicies)
@@ -207,10 +216,13 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("DELETE /api/policies/waivers/{key}", s.handleDeletePolicyWaiver)
 	s.mux.HandleFunc("POST /api/convert", s.handleConvert)
 	s.mux.HandleFunc("GET /api/import/containers", s.handleImportContainers)
+	s.mux.HandleFunc("POST /api/import/containers/{id}/stop", s.handleStopImportContainer)
 	s.mux.HandleFunc("GET /api/units", s.handleListUnits)
+	s.mux.HandleFunc("GET /api/stats", s.handleStats)
 	s.mux.HandleFunc("GET /api/units/{scope}/{name}", s.handleGetUnit)
 	s.mux.HandleFunc("PUT /api/units/{scope}/{name}", s.handlePutUnit)
 	s.mux.HandleFunc("DELETE /api/units/{scope}/{name}", s.handleDeleteUnit)
+	s.mux.HandleFunc("POST /api/units/bulk-action", s.handleBulkAction)
 	s.mux.HandleFunc("POST /api/units/{scope}/{name}/action", s.handleAction)
 	s.mux.HandleFunc("GET /api/units/{scope}/{name}/logs", s.handleLogs)
 	s.mux.HandleFunc("GET /api/units/{scope}/{name}/history", s.handleHistory)
@@ -220,6 +232,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("GET /api/host", s.handleHost)
 	s.mux.HandleFunc("GET /api/gpus", s.handleGPUs)
 	s.mux.HandleFunc("GET /api/updates", s.handleUpdates)
+	s.mux.HandleFunc("POST /api/updates/apply", s.handleApplyUpdates)
 	s.mux.HandleFunc("POST /api/units/{scope}/{name}/update", s.handleUpdateUnit)
 	s.mux.HandleFunc("GET /api/secrets", s.handleListSecrets)
 	s.mux.HandleFunc("POST /api/secrets", s.handleCreateSecret)
@@ -250,7 +263,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			// full access
 		case loggedIn: // viewer account
-			if !readOnlyAllowed(r) {
+			if r.URL.Path == "/api/me/password" && r.Method == http.MethodPost {
+				// Any real account may rotate its own password; share links cannot.
+			} else if !readOnlyAllowed(r) {
 				httpError(w, http.StatusForbidden, "your account is view-only")
 				return
 			}

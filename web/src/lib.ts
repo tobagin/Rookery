@@ -29,6 +29,8 @@ export interface Unit {
   restarts?: number;
   pod?: string;
   gpus?: string[];
+  stats?: { cpuPct?: number; memBytes?: number };
+  health?: string;
   service?: string;
   path?: string;
   unitFile?: string;
@@ -79,6 +81,7 @@ export interface ManagedNode {
   unknown: number;
   rootful?: NodeCounts;
   rootless?: NodeCounts;
+  metrics?: HostInfo["metrics"];
   errors?: string[];
 }
 

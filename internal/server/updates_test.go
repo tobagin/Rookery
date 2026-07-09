@@ -26,8 +26,14 @@ func (f *fakePodman) Info(context.Context) (*podman.Info, error) {
 func (f *fakePodman) Containers(context.Context) ([]podman.ContainerSummary, error) {
 	return nil, nil
 }
+func (f *fakePodman) Stats(context.Context) ([]podman.ContainerStats, error) {
+	return nil, nil
+}
 func (f *fakePodman) InspectContainer(context.Context, string) ([]byte, error) {
 	return nil, fmt.Errorf("not implemented")
+}
+func (f *fakePodman) StopContainer(context.Context, string) error {
+	return nil
 }
 func (f *fakePodman) ImageDigests(_ context.Context, ref string) ([]string, error) {
 	d, ok := f.digests[ref]

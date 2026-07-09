@@ -116,3 +116,37 @@ func (s *Server) handleSetUserPassword(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "user.password", r.PathValue("name"), nil)
 	writeJSON(w, http.StatusOK, map[string]any{"updated": r.PathValue("name")})
 }
+
+func (s *Server) handleChangeMyPassword(w http.ResponseWriter, r *http.Request) {
+	if !s.usersAvailable(w) {
+		return
+	}
+	sess, ok := s.session(r)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var req struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if _, valid := s.users.VerifyUser(sess.user, req.CurrentPassword); !valid {
+		httpError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+	if err := s.users.SetPassword(sess.user, req.NewPassword); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	currentToken := ""
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		currentToken = c.Value
+	}
+	s.sess.revokeUser(sess.user, currentToken)
+	s.audit(r, "user.password.self", sess.user, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"updated": sess.user})
+}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tobagin/rookery/internal/appdb"
 	"github.com/tobagin/rookery/internal/oidc"
 	"github.com/tobagin/rookery/internal/userstore"
 )
@@ -39,6 +41,7 @@ type sessions struct {
 	mu     sync.Mutex
 	tokens map[string]*session
 	ttl    time.Duration
+	db     *sql.DB
 }
 
 type oidcState struct {
@@ -93,6 +96,18 @@ func newSessions(ttl time.Duration) *sessions {
 	return &sessions{tokens: map[string]*session{}, ttl: ttl}
 }
 
+func (s *sessions) useDB(db *sql.DB) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.db = db
+	_ = appdb.DeleteExpiredSessions(db, time.Now())
+}
+
+func sessionHash(token string) string {
+	sum := sha256.Sum256([]byte("rookery-session:" + token))
+	return hex.EncodeToString(sum[:])
+}
+
 func (s *sessions) create(user, role string) string {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -101,12 +116,18 @@ func (s *sessions) create(user, role string) string {
 	token := hex.EncodeToString(buf)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	if s.db != nil {
+		_ = appdb.DeleteExpiredSessions(s.db, now)
+		_ = appdb.PutSession(s.db, sessionHash(token), user, role, now.Add(s.ttl), now)
+		return token
+	}
 	for t, sess := range s.tokens { // lazy cleanup
-		if time.Now().After(sess.expiry) {
+		if now.After(sess.expiry) {
 			delete(s.tokens, t)
 		}
 	}
-	s.tokens[token] = &session{user: user, role: role, expiry: time.Now().Add(s.ttl)}
+	s.tokens[token] = &session{user: user, role: role, expiry: now.Add(s.ttl)}
 	return token
 }
 
@@ -114,22 +135,56 @@ func (s *sessions) create(user, role string) string {
 func (s *sessions) get(token string) (*session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	if s.db != nil {
+		row, ok, err := appdb.GetSession(s.db, sessionHash(token))
+		if err != nil || !ok {
+			return nil, false
+		}
+		if now.After(row.ExpiresAt) {
+			_ = appdb.DeleteSession(s.db, row.IDHash)
+			return nil, false
+		}
+		expiry := now.Add(s.ttl)
+		_ = appdb.PutSession(s.db, row.IDHash, row.Username, row.Role, expiry, now)
+		return &session{user: row.Username, role: row.Role, expiry: expiry}, true
+	}
 	sess, ok := s.tokens[token]
 	if !ok {
 		return nil, false
 	}
-	if time.Now().After(sess.expiry) {
+	if now.After(sess.expiry) {
 		delete(s.tokens, token)
 		return nil, false
 	}
-	sess.expiry = time.Now().Add(s.ttl)
+	sess.expiry = now.Add(s.ttl)
 	return sess, true
 }
 
 func (s *sessions) revoke(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db != nil {
+		_ = appdb.DeleteSession(s.db, sessionHash(token))
+	}
 	delete(s.tokens, token)
+}
+
+func (s *sessions) revokeUser(user, exceptToken string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exceptHash := ""
+	if exceptToken != "" {
+		exceptHash = sessionHash(exceptToken)
+	}
+	if s.db != nil {
+		_ = appdb.DeleteUserSessions(s.db, user, exceptHash)
+	}
+	for token, sess := range s.tokens {
+		if sess.user == user && token != exceptToken {
+			delete(s.tokens, token)
+		}
+	}
 }
 
 /* ---------- access decisions ---------- */

@@ -85,7 +85,7 @@ body {
 a { color: var(--accent-2); text-decoration: none; }
 a:hover { color: var(--text); }
 button, input, select, textarea { font: inherit; }
-code, pre, textarea.code-editor { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+code, pre, textarea.code-editor, .cm-editor { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 232px 1fr; transition: grid-template-columns .16s ease; }
@@ -289,6 +289,13 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
   width: 100%; min-height: 320px; resize: vertical; background: var(--input); color: var(--text); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px; line-height: 1.5; tab-size: 4; margin: 10px 0;
 }
+.cm-editor-wrap { padding: 0; overflow: hidden; }
+.cm-editor-wrap .cm-editor { min-height: 318px; background: transparent; color: var(--text); font-size: 13px; }
+.cm-editor-wrap.small .cm-editor { min-height: 218px; }
+.cm-editor-wrap.short .cm-editor { min-height: 88px; }
+.cm-editor-wrap .cm-scroller { min-height: inherit; }
+.cm-editor-wrap .cm-gutters { background: rgba(255,255,255,.025); color: var(--muted); border-right: 1px solid var(--border); }
+.cm-editor-wrap .cm-activeLine, .cm-editor-wrap .cm-activeLineGutter { background: rgba(81,214,200,.07); }
 .code-editor.small { min-height: 220px; }
 .code-editor.short { min-height: 90px; }
 .output {
@@ -308,6 +315,10 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
 .history-row, .gpu-row {
   display: flex; align-items: center; gap: 10px; padding: 10px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap;
 }
+.select-row { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 8px; }
+.select-row > input { justify-self: center; }
+.select-row .unit-row { min-width: 0; }
+.account-password-form { max-width: 420px; }
 .history-row:hover, .gpu-row:hover { background: var(--row-hover); }
 .history-row:last-child, .gpu-row:last-child { border-bottom: 0; }
 .audit-row code { display: inline-block; max-width: 100%; margin-top: 4px; white-space: normal; overflow-wrap: anywhere; color: var(--text-2); }

@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentSchema = 4
+const CurrentSchema = 5
 
 // Open opens rookery.db and applies all schema migrations.
 func Open(path string) (*sql.DB, error) {
@@ -127,6 +127,23 @@ func applyMigration(db *sql.DB, version int) error {
 	created_by TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`); err != nil {
+			return err
+		}
+	case 5:
+		if _, err := tx.Exec(`CREATE TABLE sessions (
+	id_hash TEXT PRIMARY KEY,
+	username TEXT NOT NULL,
+	role TEXT NOT NULL,
+	expires_at TEXT NOT NULL,
+	last_seen_at TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE INDEX sessions_username_idx ON sessions(username)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE INDEX sessions_expires_at_idx ON sessions(expires_at)`); err != nil {
 			return err
 		}
 	default:

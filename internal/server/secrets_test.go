@@ -29,9 +29,13 @@ func (f *fakeSecretsPodman) Info(context.Context) (*podman.Info, error) { return
 func (f *fakeSecretsPodman) Containers(context.Context) ([]podman.ContainerSummary, error) {
 	return nil, nil
 }
+func (f *fakeSecretsPodman) Stats(context.Context) ([]podman.ContainerStats, error) {
+	return nil, nil
+}
 func (f *fakeSecretsPodman) InspectContainer(context.Context, string) ([]byte, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+func (f *fakeSecretsPodman) StopContainer(context.Context, string) error { return nil }
 func (f *fakeSecretsPodman) ImageDigests(context.Context, string) ([]string, error) {
 	return nil, fmt.Errorf("not implemented")
 }
