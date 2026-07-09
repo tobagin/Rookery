@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tobagin/rookery/internal/appdb"
-	"github.com/tobagin/rookery/internal/oidc"
-	"github.com/tobagin/rookery/internal/userstore"
+	"github.com/rookerylabs/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/oidc"
+	"github.com/rookerylabs/rookery/internal/userstore"
 )
 
 const (

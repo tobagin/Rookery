@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/quadlet"
 )
 
 // GeneratedUnit is one proposed Quadlet file. Warnings list everything the

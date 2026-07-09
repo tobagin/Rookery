@@ -12,7 +12,7 @@ Wants=network-online.target
 After=network-online.target
 
 [Container]
-Image=ghcr.io/tobagin/rookery:latest
+Image=ghcr.io/rookerylabs/rookery:latest
 # Bind all interfaces inside the container; the host side stays loopback-only.
 Environment=ROOKERY_LISTEN=0.0.0.0:7665
 PublishPort=127.0.0.1:7665:7665

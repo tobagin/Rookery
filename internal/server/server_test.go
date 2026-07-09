@@ -15,11 +15,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/appdb"
-	"github.com/tobagin/rookery/internal/quadlet"
-	"github.com/tobagin/rookery/internal/rhost/rhosttest"
-	"github.com/tobagin/rookery/internal/systemd"
-	"github.com/tobagin/rookery/internal/userstore"
+	"github.com/rookerylabs/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/rhost/rhosttest"
+	"github.com/rookerylabs/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/userstore"
 )
 
 // fakeSystemd records calls and serves canned per-unit states.

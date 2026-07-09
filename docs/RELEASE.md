@@ -49,7 +49,7 @@ sha256sum -c SHA256SUMS
 - Pull the tagged container image and check it starts:
 
 ```sh
-podman pull ghcr.io/tobagin/rookery:v0.1.0
+podman pull ghcr.io/rookerylabs/rookery:v0.1.0
 ```
 
 - Publish the GitHub release only after binaries, checksums, and image tags

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/quadlet"
 )
 
 // WatchFailures polls every area's unit states and calls notify when a

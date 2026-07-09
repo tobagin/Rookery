@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tobagin/rookery/internal/convert"
-	"github.com/tobagin/rookery/internal/hostinfo"
-	"github.com/tobagin/rookery/internal/journal"
-	"github.com/tobagin/rookery/internal/quadlet"
-	"github.com/tobagin/rookery/internal/rhost"
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/convert"
+	"github.com/rookerylabs/rookery/internal/hostinfo"
+	"github.com/rookerylabs/rookery/internal/journal"
+	"github.com/rookerylabs/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 // unitJSON is one unit as the API reports it: the file on disk plus live

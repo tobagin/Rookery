@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/rhost"
 )
 
 // InstallShim points rhost.SSHCommand at a script that mimics ssh's

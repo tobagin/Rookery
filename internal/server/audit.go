@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/tobagin/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/appdb"
 )
 
 func (s *Server) audit(r *http.Request, action, target string, detail any) {

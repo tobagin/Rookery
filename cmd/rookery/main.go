@@ -19,16 +19,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tobagin/rookery/internal/alert"
-	"github.com/tobagin/rookery/internal/appdb"
-	"github.com/tobagin/rookery/internal/gitstore"
-	"github.com/tobagin/rookery/internal/oidc"
-	"github.com/tobagin/rookery/internal/podman"
-	"github.com/tobagin/rookery/internal/quadlet"
-	"github.com/tobagin/rookery/internal/rhost"
-	"github.com/tobagin/rookery/internal/server"
-	"github.com/tobagin/rookery/internal/systemd"
-	"github.com/tobagin/rookery/internal/userstore"
+	"github.com/rookerylabs/rookery/internal/agent"
+	"github.com/rookerylabs/rookery/internal/alert"
+	"github.com/rookerylabs/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/gitstore"
+	"github.com/rookerylabs/rookery/internal/oidc"
+	"github.com/rookerylabs/rookery/internal/podman"
+	"github.com/rookerylabs/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/server"
+	"github.com/rookerylabs/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/userstore"
 )
 
 // version is stamped by the build (see Makefile).
@@ -44,6 +45,10 @@ func main() {
 		"track unit directories in git: commit on save, history, rollback (auto-enabled for dirs that are already repositories)")
 	remotes := flag.String("remotes", envOr("ROOKERY_REMOTES", ""),
 		`comma-separated remote hosts to manage over ssh, as alias=user@host (e.g. "nas=root@nas.local,media=deploy@media.lan")`)
+	agents := flag.String("agents", envOr("ROOKERY_AGENTS", ""),
+		`comma-separated rookery-agents to manage, as alias=url (e.g. "pi=http://10.87.0.5:7666"); each speaks for one rootless/system scope`)
+	agentToken := flag.String("agent-token", envOr("ROOKERY_AGENT_TOKEN", ""),
+		"shared bearer token presented to rookery-agents")
 	alerts := flag.String("alerts", envOr("ROOKERY_ALERTS", ""),
 		`comma-separated failure-alert destinations: ntfy://host/topic, telegram://BOT_TOKEN@CHAT_ID, or an http(s) webhook URL`)
 	alertInterval := flag.Duration("alert-interval", envDurationOr("ROOKERY_ALERT_INTERVAL", 30*time.Second),
@@ -170,6 +175,11 @@ func main() {
 		log.Fatal(err)
 	}
 	areas = append(areas, remoteAreasList...)
+	agentAreasList, err := agentAreas(*agents, *agentToken)
+	if err != nil {
+		log.Fatal(err)
+	}
+	areas = append(areas, agentAreasList...)
 	attachGit(areas, *gitFlag)
 
 	srv := server.New(server.Options{
@@ -512,6 +522,46 @@ func remoteAreas(spec string) ([]server.Area, error) {
 			area.Dirs = quadlet.UserDirs(home)
 		}
 		log.Printf("remote %s: %s (uid %d, %s scope)", alias, target, uid, area.Scope)
+		areas = append(areas, area)
+	}
+	return areas, nil
+}
+
+// agentAreas builds an area per rookery-agent. It probes each agent's
+// /v1/info to learn whether it serves a user or the system scope — the
+// analogue of remoteAreas' ssh Probe, but over the agent's own HTTP API, so
+// there is no ssh account or key to arrange.
+func agentAreas(spec, token string) ([]server.Area, error) {
+	var areas []server.Area
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		alias, url, ok := strings.Cut(entry, "=")
+		if !ok || alias == "" || url == "" {
+			return nil, fmt.Errorf("-agents: entry %q must be alias=url", entry)
+		}
+		if token == "" {
+			return nil, fmt.Errorf("-agents: %s needs a token (set -agent-token or ROOKERY_AGENT_TOKEN)", alias)
+		}
+		cli := agent.New(url, token)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		info, err := cli.Info(ctx)
+		cancel()
+		if err != nil {
+			log.Printf("WARNING: agent %s (%s) unreachable, skipping: %v", alias, url, err)
+			continue
+		}
+		nodeID := alias
+		if node, scope, ok := strings.Cut(alias, "."); ok && node != "" && groupedRemoteScope(scope) {
+			nodeID = node
+		}
+		area := server.Area{Label: alias, NodeID: nodeID, Agent: cli}
+		if !info.System {
+			area.Scope = systemd.Scope{User: info.User}
+		}
+		log.Printf("agent %s: %s (%s scope, %d containers)", alias, url, area.Scope, info.ContainersTotal)
 		areas = append(areas, area)
 	}
 	return areas, nil

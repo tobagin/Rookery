@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"os/user"
 
-	"github.com/tobagin/rookery/internal/rhost"
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 // Command builds a journalctl invocation for a unit's logs in the given

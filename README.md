@@ -3,7 +3,7 @@
 **Quadlet-native web UI for Podman** — manage systemd containers, pods, and
 GPUs from your browser, with unit files on disk as the single source of truth.
 
-[![CI](https://github.com/tobagin/rookery/actions/workflows/ci.yml/badge.svg)](https://github.com/tobagin/rookery/actions/workflows/ci.yml)
+[![CI](https://github.com/rookerylabs/rookery/actions/workflows/ci.yml/badge.svg)](https://github.com/rookerylabs/rookery/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/go-%E2%89%A51.25-00ADD8?logo=go)
 ![Runtime deps](https://img.shields.io/badge/runtime%20deps-systemd%20%7C%20podman-lightgrey)
@@ -96,7 +96,7 @@ metadata, such as accounts and UI-managed settings, in `rookery.db`.
 ## Quick start
 
 ```sh
-git clone https://github.com/tobagin/rookery && cd rookery
+git clone https://github.com/rookerylabs/rookery && cd rookery
 make build          # builds the Vite UI, then go build ./cmd/rookery
 ./rookery           # → http://127.0.0.1:7665
 ```
@@ -190,7 +190,7 @@ unit for the binary — the simplest install.
 
 Or run the image (amd64 + arm64, published from CI):
 [packaging/rookery.container](packaging/rookery.container) runs
-`ghcr.io/tobagin/rookery` as a Quadlet, dogfooding Rookery on itself. The
+`ghcr.io/rookerylabs/rookery` as a Quadlet, dogfooding Rookery on itself. The
 container needs the host mounts listed there (unit dirs, `/run/systemd`,
 journal, Podman socket, and the host's quadlet generator for validation).
 

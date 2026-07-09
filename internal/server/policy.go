@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/tobagin/rookery/internal/appdb"
-	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/quadlet"
 )
 
 type PolicyFinding struct {

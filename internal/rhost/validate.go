@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tobagin/rookery/internal/quadlet"
+	"github.com/rookerylabs/rookery/internal/quadlet"
 )
 
 const noGenMarker = "__ROOKERY_NO_GENERATOR__"

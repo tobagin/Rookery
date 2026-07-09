@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tobagin/rookery/internal/appdb"
-	"github.com/tobagin/rookery/internal/userstore"
+	"github.com/rookerylabs/rookery/internal/appdb"
+	"github.com/rookerylabs/rookery/internal/userstore"
 )
 
 func randomBearerToken() (string, error) {

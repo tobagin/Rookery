@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/rhost/rhosttest"
+	"github.com/rookerylabs/rookery/internal/rhost/rhosttest"
 )
 
 // TestRemoteStore drives the same git operations through the ssh shim: the

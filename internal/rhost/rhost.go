@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tobagin/rookery/internal/hostinfo"
+	"github.com/rookerylabs/rookery/internal/hostinfo"
 )
 
 // SSHCommand is the ssh invocation prefix. BatchMode keeps a missing key or

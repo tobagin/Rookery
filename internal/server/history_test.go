@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tobagin/rookery/internal/gitstore"
-	"github.com/tobagin/rookery/internal/systemd"
+	"github.com/rookerylabs/rookery/internal/gitstore"
+	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
 // newGitServer builds a server whose system area tracks history in a real

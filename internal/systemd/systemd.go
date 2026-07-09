@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tobagin/rookery/internal/rhost"
+	"github.com/rookerylabs/rookery/internal/rhost"
 )
 
 // Scope selects which systemd manager to talk to: the system manager
