@@ -67,7 +67,7 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 	scopeErrors := map[string]string{}
 	for _, area := range s.areasSnapshot() {
 		if area.ViaAgent() {
-			out = appendAgentUnits(r, area, out, scopeErrors)
+			out = s.appendAgentUnits(r, area, out, scopeErrors)
 			continue
 		}
 		found, err := discoverArea(r.Context(), area)
@@ -190,6 +190,9 @@ func (s *Server) unitJSONFor(r *http.Request, area Area, name, path string) unit
 
 func (s *Server) runtimeByService(ctx context.Context, area Area) map[string]unitRuntime {
 	out := map[string]unitRuntime{}
+	if area.ViaAgent() {
+		return agentRuntimeByService(ctx, area)
+	}
 	if area.Remote() {
 		rows, err := rhost.ContainerStats(ctx, area.Scope.SSH, area.Scope.User != "")
 		if err != nil {
@@ -260,6 +263,19 @@ func inspectHealth(raw []byte) string {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	out := map[string]unitStats{}
 	for _, area := range s.areasSnapshot() {
+		if area.ViaAgent() {
+			units, err := area.Agent.Units(r.Context())
+			if err != nil {
+				continue
+			}
+			runtime := s.runtimeByService(r.Context(), area)
+			for _, u := range units {
+				if rt, ok := runtime[u.Service]; ok && rt.Stats != nil {
+					out[area.Label+"/"+u.Name] = *rt.Stats
+				}
+			}
+			continue
+		}
 		found, err := discoverArea(r.Context(), area)
 		if err != nil {
 			continue

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -43,17 +44,62 @@ func agentUnitJSON(area Area, u papi.Unit) unitJSON {
 	return uj
 }
 
-// appendAgentUnits fetches an agent area's units and appends them to out. A
-// fetch error is recorded per-scope, mirroring the local path, so one dead
-// agent never blanks the whole list.
-func appendAgentUnits(r *http.Request, area Area, out []unitJSON, scopeErrors map[string]string) []unitJSON {
+// appendAgentUnits fetches an agent area's units and appends them to out,
+// attaching live stats. A fetch error is recorded per-scope, mirroring the
+// local path, so one dead agent never blanks the whole list.
+func (s *Server) appendAgentUnits(r *http.Request, area Area, out []unitJSON, scopeErrors map[string]string) []unitJSON {
 	units, err := area.Agent.Units(r.Context())
 	if err != nil {
 		scopeErrors[area.Label] = err.Error()
 		return out
 	}
+	runtime := s.runtimeByService(r.Context(), area)
 	for _, u := range units {
-		out = append(out, agentUnitJSON(area, u))
+		uj := agentUnitJSON(area, u)
+		if rt, ok := runtime[u.Service]; ok {
+			uj.Stats = rt.Stats
+			uj.Health = rt.Health
+		}
+		out = append(out, uj)
+	}
+	return out
+}
+
+// agentRuntimeByService maps an agent scope's containers to per-service stats,
+// mirroring the local runtimeByService: match PODMAN_SYSTEMD_UNIT to a stats
+// row by container id or name. Health is absent — the agent exposes no
+// inspect endpoint yet — so it stays empty rather than guessed.
+func agentRuntimeByService(ctx context.Context, area Area) map[string]unitRuntime {
+	out := map[string]unitRuntime{}
+	containers, err := area.Agent.Containers(ctx)
+	if err != nil {
+		return out
+	}
+	statsRows, _ := area.Agent.Stats(ctx)
+	stats := map[string]unitStats{}
+	for _, row := range statsRows {
+		st := unitStats{CPUPct: row.CPUPct, MemBytes: row.MemBytes}
+		if row.ID != "" {
+			stats[row.ID] = st
+		}
+		if row.Name != "" {
+			stats[row.Name] = st
+		}
+	}
+	for _, c := range containers {
+		service := c.Labels["PODMAN_SYSTEMD_UNIT"]
+		if service == "" {
+			continue
+		}
+		rt := unitRuntime{}
+		if st, ok := stats[c.ID]; ok {
+			rt.Stats = &st
+		} else if len(c.Names) > 0 {
+			if st, ok := stats[c.Names[0]]; ok {
+				rt.Stats = &st
+			}
+		}
+		out[service] = rt
 	}
 	return out
 }
