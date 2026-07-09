@@ -26,6 +26,8 @@ type unitJSON struct {
 	Name        string   `json:"name"`
 	Kind        string   `json:"kind"`
 	Scope       string   `json:"scope"`
+	ScopeKind   string   `json:"scopeKind"`
+	ScopeUser   string   `json:"scopeUser,omitempty"`
 	Service     string   `json:"service"`
 	Path        string   `json:"path"`
 	ReadOnly    bool     `json:"readOnly"`
@@ -68,14 +70,20 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 			statuses = nil
 		}
 		for i, d := range found {
+			scopeKind := "rootless"
+			if area.Scope.IsSystem() {
+				scopeKind = "rootful"
+			}
 			uj := unitJSON{
-				Name:     d.unit.Name,
-				Kind:     string(d.unit.Kind),
-				Scope:    area.Label,
-				Service:  services[i],
-				Path:     d.unit.Path,
-				ReadOnly: filepath.Dir(d.unit.Path) != area.Dirs[0],
-				Load:     "unknown",
+				Name:      d.unit.Name,
+				Kind:      string(d.unit.Kind),
+				Scope:     area.Label,
+				ScopeKind: scopeKind,
+				ScopeUser: area.Scope.User,
+				Service:   services[i],
+				Path:      d.unit.Path,
+				ReadOnly:  filepath.Dir(d.unit.Path) != area.Dirs[0],
+				Load:      "unknown",
 			}
 			if i < len(statuses) {
 				uj.fillStatus(statuses[i])

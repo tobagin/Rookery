@@ -13,6 +13,14 @@ type NodeScope struct {
 	Label  string `json:"label"`
 	User   string `json:"user,omitempty"`
 	System bool   `json:"system"`
+	Kind   string `json:"kind"`
+}
+
+type NodeCounts struct {
+	Units   int `json:"units"`
+	Running int `json:"running"`
+	Failed  int `json:"failed"`
+	Unknown int `json:"unknown"`
 }
 
 type NodeInventory struct {
@@ -26,6 +34,8 @@ type NodeInventory struct {
 	Running  int         `json:"running"`
 	Failed   int         `json:"failed"`
 	Unknown  int         `json:"unknown"`
+	Rootful  NodeCounts  `json:"rootful"`
+	Rootless NodeCounts  `json:"rootless"`
 	Errors   []string    `json:"errors,omitempty"`
 }
 
@@ -46,6 +56,9 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 		if area.Remote() {
 			id = area.Scope.SSH
 		}
+		if area.NodeID != "" {
+			id = area.NodeID
+		}
 		i, ok := index[id]
 		if !ok {
 			nodes = append(nodes, NodeInventory{ID: id, Address: area.Scope.SSH, Local: !area.Remote()})
@@ -53,7 +66,16 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 			index[id] = i
 		}
 		node := &nodes[i]
-		node.Scopes = append(node.Scopes, NodeScope{Label: area.Label, User: area.Scope.User, System: area.Scope.IsSystem()})
+		if node.Address == "" && area.Scope.SSH != "" {
+			node.Address = area.Scope.SSH
+		}
+		scopeKind := "rootless"
+		counts := &node.Rootless
+		if area.Scope.IsSystem() {
+			scopeKind = "rootful"
+			counts = &node.Rootful
+		}
+		node.Scopes = append(node.Scopes, NodeScope{Label: area.Label, User: area.Scope.User, System: area.Scope.IsSystem(), Kind: scopeKind})
 		node.UnitDirs = append(node.UnitDirs, area.Dirs...)
 
 		found, err := discoverArea(r.Context(), area)
@@ -62,6 +84,7 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 			continue
 		}
 		node.Units += len(found)
+		counts.Units += len(found)
 		services := make([]string, len(found))
 		for i, d := range found {
 			services[i], _ = quadlet.ServiceName(d.unit.Name)
@@ -69,6 +92,7 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 		statuses, err := s.sysd.Status(r.Context(), area.Scope, services)
 		if err != nil {
 			node.Unknown += len(found)
+			counts.Unknown += len(found)
 			node.Errors = append(node.Errors, area.Label+": "+err.Error())
 			continue
 		}
@@ -76,11 +100,14 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 			switch st.Active {
 			case "active":
 				node.Running++
+				counts.Running++
 			case "failed":
 				node.Failed++
+				counts.Failed++
 			default:
 				if st.Load == "unknown" {
 					node.Unknown++
+					counts.Unknown++
 				}
 			}
 		}

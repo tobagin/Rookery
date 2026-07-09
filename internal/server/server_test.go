@@ -254,11 +254,17 @@ func TestNodeInventoryGroupsScopesByManagedNode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(remoteDir, "remote.container"), []byte("[Container]\nImage=example.test/remote\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	remoteUserDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(remoteUserDir, "remote-user.container"), []byte("[Container]\nImage=example.test/remote-user\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	srv.areas = append(srv.areas,
 		Area{Label: "alice", Scope: systemd.Scope{User: "alice"}, Dirs: []string{t.TempDir()}},
-		Area{Label: "nas", Scope: systemd.Scope{SSH: "root@nas.local"}, Dirs: []string{remoteDir}},
+		Area{Label: "nas.root", NodeID: "nas", Scope: systemd.Scope{SSH: "root@nas.local"}, Dirs: []string{remoteDir}},
+		Area{Label: "nas.user", NodeID: "nas", Scope: systemd.Scope{User: "alice", SSH: "alice@nas.local"}, Dirs: []string{remoteUserDir}},
 	)
 	srv.sysd.(*fakeSystemd).states["remote.service"] = systemd.UnitStatus{Load: "loaded", Active: "active", Sub: "running"}
+	srv.sysd.(*fakeSystemd).states["remote-user.service"] = systemd.UnitStatus{Load: "loaded", Active: "active", Sub: "running"}
 
 	rec, body := doJSON(t, srv, "GET", "/api/nodes", "")
 	if rec.Code != http.StatusOK {
@@ -273,8 +279,16 @@ func TestNodeInventoryGroupsScopesByManagedNode(t *testing.T) {
 		t.Fatalf("local node = %#v", local)
 	}
 	remote := nodes[1].(map[string]any)
-	if remote["id"] != "root@nas.local" || remote["local"] != false || int(remote["running"].(float64)) != 1 {
+	if remote["id"] != "nas" || remote["local"] != false || int(remote["running"].(float64)) != 2 {
 		t.Fatalf("remote node = %#v", remote)
+	}
+	rootful := remote["rootful"].(map[string]any)
+	if int(rootful["units"].(float64)) != 1 || int(rootful["running"].(float64)) != 1 {
+		t.Fatalf("remote rootful = %#v", rootful)
+	}
+	rootless := remote["rootless"].(map[string]any)
+	if int(rootless["units"].(float64)) != 1 || int(rootless["running"].(float64)) != 1 {
+		t.Fatalf("remote rootless = %#v", rootless)
 	}
 }
 

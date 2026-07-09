@@ -662,6 +662,7 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
   const api = useApi();
   const cls = stateClass(unit);
   const canStart = cls === "stopped" || cls === "failed";
+  const scopeKind = unit.scopeKind || (unit.scope === "system" ? "rootful" : "rootless");
 
   async function action(act: string, ev: React.MouseEvent) {
     ev.preventDefault();
@@ -685,6 +686,7 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
       <span className="badges">
         <StatusBadge state={cls} label={stateLabel(unit)} />
         <span className="badge">{unit.kind}</span>
+        <span className={scopeKind === "rootful" ? "badge" : "badge badge-user"}>{scopeKind}</span>
         {unit.scope !== "system" && <span className="badge badge-user">{unit.scope}</span>}
         {!!unit.restarts && <span className="badge badge-warn">restart {unit.restarts}</span>}
         {unit.pod && <span className="badge">pod {unit.pod.replace(/\.pod$/, "")}</span>}
@@ -790,10 +792,11 @@ function UnitDetail() {
   if (!unit) return <Page title="Unit"><p className="muted">Loading unit...</p></Page>;
 
   const changed = content !== savedContent;
+  const scopeKind = unit.scopeKind || (unit.scope === "system" ? "rootful" : "rootless");
   return (
     <Page
       title={unit.name}
-      kicker={`${unit.kind} · ${unit.scope}`}
+      kicker={`${unit.kind} · ${scopeKind} · ${unit.scope}`}
       back={<Link className="btn icon-only" to="/units"><ChevronLeft size={18} /></Link>}
       action={!auth.readOnly && <div className="action-row"><button className="btn" onClick={() => lifecycle("start")}><Play size={16} /> Start</button><button className="btn" onClick={() => lifecycle("stop")}><CircleStop size={16} /> Stop</button><button className="btn" onClick={() => lifecycle("restart")}><RefreshCw size={16} /> Restart</button></div>}
     >
@@ -849,6 +852,8 @@ function OverviewTab({ unit, members }: { unit: Unit; members: Unit[] }) {
           ["State", stateLabel(unit)],
           ["Kind", unit.kind],
           ["Scope", unit.scope],
+          ["Scope type", unit.scopeKind || (unit.scope === "system" ? "rootful" : "rootless")],
+          ["Scope user", unit.scopeUser || "n/a"],
           ["Image", unit.image || "n/a"],
           ["Restarts", String(unit.restarts || 0)],
           ["Pod", unit.pod || "n/a"],
@@ -1103,7 +1108,9 @@ function FleetView() {
 function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: boolean; onChanged: () => void }) {
   const api = useApi();
   const { toast } = useApiContext();
-  const scopeText = node.scopes.map((s) => s.system ? s.label : `${s.label} (${s.user || "user"})`).join(", ");
+  const scopeText = node.scopes.map((s) => s.system ? `${s.label} (rootful)` : `${s.label} (${s.user || "user"} rootless)`).join(", ");
+  const rootful = node.rootful || { units: 0, running: 0, failed: 0, unknown: 0 };
+  const rootless = node.rootless || { units: 0, running: 0, failed: 0, unknown: 0 };
   async function editLabels() {
     const value = prompt(`Labels for ${node.local ? "local" : node.id}`, node.labels?.join(", ") || "");
     if (value == null) return;
@@ -1124,6 +1131,8 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
         {node.errors?.length ? <div className="warn-text">{node.errors.join("; ")}</div> : null}
       </div>
       <span className="grow" />
+      <span className="badge">rootful {rootful.units}/{rootful.running}</span>
+      <span className="badge badge-user">rootless {rootless.units}/{rootless.running}</span>
       <span className="badge">{node.units} units</span>
       <span className="badge badge-running">{node.running} running</span>
       {node.failed > 0 && <span className="badge badge-failed">{node.failed} failed</span>}
@@ -1828,6 +1837,65 @@ function AppSettings({ tab, host }: { tab: string; host: HostInfo | null }) {
   );
 }
 
+type RemoteEntry = { node: string; scope: string; target: string };
+
+function parseRemoteEntries(value: unknown): RemoteEntry[] {
+  const raw = String(value ?? "").trim();
+  if (!raw) return [];
+  return raw.split(",").map((part) => {
+    const [aliasRaw, targetRaw = ""] = part.split("=", 2);
+    const alias = aliasRaw.trim();
+    const [nodeRaw, scopeRaw = ""] = alias.split(".", 2);
+    const grouped = ["root", "rootful", "user", "rootless"].includes(scopeRaw);
+    const node = grouped ? nodeRaw : alias;
+    const scope = grouped ? scopeRaw : "";
+    return { node: node.trim(), scope: scope.trim(), target: targetRaw.trim() };
+  }).filter((row) => row.node || row.target);
+}
+
+function serializeRemoteEntries(rows: RemoteEntry[]): string {
+  return rows.map((row) => {
+    const node = row.node.trim();
+    const scope = row.scope.trim();
+    const target = row.target.trim();
+    if (!node || !target) return "";
+    const alias = scope ? `${node}.${scope}` : node;
+    return `${alias}=${target}`;
+  }).filter(Boolean).join(",");
+}
+
+function RemoteNodesSetting({ item, value, onChange }: { item: SettingItem; value: unknown; onChange: (value: unknown) => void }) {
+  const disabled = item.locked || !item.editable;
+  const rows = parseRemoteEntries(value);
+  const setRows = (next: RemoteEntry[]) => onChange(serializeRemoteEntries(next));
+  const update = (idx: number, patch: Partial<RemoteEntry>) => setRows(rows.map((row, i) => i === idx ? { ...row, ...patch } : row));
+  const add = () => setRows([...rows, { node: "", scope: "", target: "" }]);
+  const remove = (idx: number) => setRows(rows.filter((_, i) => i !== idx));
+  return (
+    <div className="remote-setting">
+      <div className="remote-setting-head">
+        <strong>Remote hosts</strong>
+        <button className="btn btn-sm" type="button" disabled={disabled} onClick={add}><Plus size={14} /> Add</button>
+      </div>
+      {rows.length ? rows.map((row, idx) => (
+        <div className="remote-setting-row" key={idx}>
+          <input className="input" disabled={disabled} placeholder="node" value={row.node} onChange={(e) => update(idx, { node: e.target.value })} />
+          <select className="input" disabled={disabled} value={row.scope} onChange={(e) => update(idx, { scope: e.target.value })}>
+            <option value="">single</option>
+            <option value="root">rootful</option>
+            <option value="rootful">rootful alias</option>
+            <option value="user">rootless</option>
+            <option value="rootless">rootless alias</option>
+          </select>
+          <input className="input" disabled={disabled} placeholder="ssh target" value={row.target} onChange={(e) => update(idx, { target: e.target.value })} />
+          <button className="btn btn-sm btn-danger" type="button" disabled={disabled} onClick={() => remove(idx)}><Trash2 size={14} /> Remove</button>
+        </div>
+      )) : <p className="muted">No remote nodes configured.</p>}
+      <input className="input remote-setting-raw" disabled={disabled} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
 function SettingControl({ item, value, onChange }: { item: SettingItem; value: unknown; onChange: (value: unknown) => void }) {
   const disabled = item.locked || !item.editable;
   const source = item.locked ? `${item.source} locked` : item.source;
@@ -1835,7 +1903,9 @@ function SettingControl({ item, value, onChange }: { item: SettingItem; value: u
   return (
     <div className="setting-row">
       <div><strong>{item.label}</strong><span className="muted">{source}{item.restartRequired ? " · restart" : ""}</span></div>
-      {typeof item.value === "boolean" ? (
+      {item.key === "remotes" ? (
+        <RemoteNodesSetting item={item} value={value} onChange={onChange} />
+      ) : typeof item.value === "boolean" ? (
         <label className="switch"><input type="checkbox" checked={boolValue} disabled={disabled} onChange={(e) => onChange(e.target.checked)} /><span /></label>
       ) : (
         <input className="input" disabled={disabled} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />

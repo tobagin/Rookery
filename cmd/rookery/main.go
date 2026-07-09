@@ -455,6 +455,8 @@ func resolveDataDir(flagVal string) string {
 // area for it: the system Quadlet tree when the ssh account is root, the
 // account's own rootless tree otherwise. An unreachable host is skipped
 // with a warning so one dead box doesn't take the whole UI down at boot.
+// Aliases may be grouped as node.scope=target, which keeps rootful and
+// rootless connections to the same host under one fleet node.
 func remoteAreas(spec string) ([]server.Area, error) {
 	var areas []server.Area
 	for _, entry := range strings.Split(spec, ",") {
@@ -466,6 +468,10 @@ func remoteAreas(spec string) ([]server.Area, error) {
 		if !ok || alias == "" || target == "" {
 			return nil, fmt.Errorf("-remotes: entry %q must be alias=user@host", entry)
 		}
+		nodeID := alias
+		if node, scope, ok := strings.Cut(alias, "."); ok && node != "" && groupedRemoteScope(scope) {
+			nodeID = node
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		uid, home, remoteUser, err := rhost.Probe(ctx, target)
 		cancel()
@@ -473,7 +479,7 @@ func remoteAreas(spec string) ([]server.Area, error) {
 			log.Printf("WARNING: remote %s (%s) unreachable, skipping: %v", alias, target, err)
 			continue
 		}
-		area := server.Area{Label: alias}
+		area := server.Area{Label: alias, NodeID: nodeID}
 		if uid == 0 {
 			area.Scope = systemd.Scope{SSH: target}
 			area.Dirs = quadlet.SystemDirs()
@@ -485,6 +491,14 @@ func remoteAreas(spec string) ([]server.Area, error) {
 		areas = append(areas, area)
 	}
 	return areas, nil
+}
+
+func groupedRemoteScope(scope string) bool {
+	switch scope {
+	case "root", "rootful", "user", "rootless":
+		return true
+	}
+	return false
 }
 
 // attachGit opens (or with force, initializes) a git repository in each

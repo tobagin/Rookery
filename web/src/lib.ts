@@ -15,6 +15,8 @@ export interface AuthState {
 
 export interface Unit {
   scope: string;
+  scopeKind?: "rootful" | "rootless";
+  scopeUser?: string;
   name: string;
   kind: string;
   description?: string;
@@ -68,14 +70,23 @@ export interface ManagedNode {
   id: string;
   address?: string;
   local: boolean;
-  scopes: Array<{ label: string; user?: string; system: boolean }>;
+  scopes: Array<{ label: string; user?: string; system: boolean; kind?: "rootful" | "rootless" }>;
   labels?: string[];
   unitDirs: string[];
   units: number;
   running: number;
   failed: number;
   unknown: number;
+  rootful?: NodeCounts;
+  rootless?: NodeCounts;
   errors?: string[];
+}
+
+export interface NodeCounts {
+  units: number;
+  running: number;
+  failed: number;
+  unknown: number;
 }
 
 export interface NodeGroup {

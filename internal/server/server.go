@@ -54,7 +54,11 @@ type Podman interface {
 // API ("system" or the username).
 type Area struct {
 	Label string
-	Scope systemd.Scope
+	// NodeID groups multiple areas that belong to the same physical host.
+	// Empty means local areas group as "local" and remote areas group by
+	// their SSH target, preserving the original one-alias-one-node behavior.
+	NodeID string
+	Scope  systemd.Scope
 	// Dirs is the Quadlet search path; Dirs[0] is primary — new units are
 	// created there, and units found elsewhere are read-only.
 	Dirs []string

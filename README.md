@@ -64,7 +64,9 @@ metadata, such as accounts and UI-managed settings, in `rookery.db`.
   CDI / VAAPI / ROCm device lines. No other web UI does this.
 - **Agentless multi-host** — `-remotes nas=root@nas.local` adds another box's
   Quadlet tree to the same dashboard: list, edit, validate (with the *remote*
-  host's generator), lifecycle, and logs over plain ssh. Nothing to install
+  host's generator), lifecycle, and logs over plain ssh. Use explicit grouped
+  aliases such as `pi.root=pi-root,pi.user=pi-user` to show rootful and
+  rootless scopes for one host under the same fleet node. Nothing to install
   on the target beyond sshd and Podman.
 - **Image-update checks** — compare every unit's tag against the digest its
   registry serves (docker.io, ghcr.io, quay.io, …), flag drift, one-click
@@ -122,7 +124,7 @@ manage alice's rootless units).
 | `-data-dir` | `ROOKERY_DATA_DIR` | `/etc/rookery` (rootful) | where `rookery.db` lives |
 | `-session-ttl` | `ROOKERY_SESSION_TTL` | `24h` | idle timeout for login sessions (sliding) |
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
-| `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...` |
+| `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...`; `node.root=target,node.user=target` groups rootful/rootless targets under one fleet node |
 | `-alerts` | `ROOKERY_ALERTS` | — | failure alerts: `ntfy://host/topic`, `telegram://TOKEN@CHAT`, webhook URL |
 | `-oidc-issuer` | `ROOKERY_OIDC_ISSUER` | — | OIDC issuer URL for SSO |
 | `-oidc-client-id` | `ROOKERY_OIDC_CLIENT_ID` | — | OIDC client ID |
@@ -302,7 +304,8 @@ Design rules (from the [PRD](docs/PRD.md)):
 | `GET /api/oidc/login` / `GET /api/oidc/callback` | OIDC authorization-code login |
 | `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth (sliding idle timeout) |
 
-`{scope}` is `system`, a username, or a remote-host alias from `-remotes`.
+`{scope}` is `system`, a username, or a remote-host alias from `-remotes`
+(for grouped remotes, the full `node.scope` alias).
 
 **Remote-scope limits:** SELinux hints and podman secrets are local-host
 only. Everything else — list, edit, validate (remote generator), lifecycle,
