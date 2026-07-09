@@ -4,7 +4,7 @@ import {
   completionKeymap,
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { bracketMatching, defaultHighlightStyle, foldGutter, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching, defaultHighlightStyle, foldGutter, indentOnInput, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { searchKeymap } from "@codemirror/search";
 import { EditorState, Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
@@ -350,7 +350,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
         <main className="content">{children}</main>
       </div>
       <nav className="bottom-nav">
-        {nav.slice(0, 5).map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} compact />)}
+        {mobileNavItems(nav).map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} compact />)}
       </nav>
       {newUnitOpen && (
         <Overlay title="New unit" onClose={() => setNewUnitOpen(false)}>
@@ -380,6 +380,28 @@ function locationOrigin() {
   return window.location.origin;
 }
 
+function highlightMatches(line: string, needle: string): React.ReactNode[] {
+  const lower = line.toLowerCase();
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  for (;;) {
+    const at = lower.indexOf(needle, i);
+    if (at < 0) {
+      out.push(line.slice(i));
+      return out;
+    }
+    if (at > i) out.push(line.slice(i, at));
+    out.push(<mark key={at}>{line.slice(at, at + needle.length)}</mark>);
+    i = at + needle.length;
+  }
+}
+
+function failureSummary(failed: Array<{ name: string; error?: string }>) {
+  const parts = failed.slice(0, 3).map((r) => `${r.name}: ${r.error || "failed"}`);
+  if (failed.length > 3) parts.push(`+${failed.length - 3} more`);
+  return parts.join("; ");
+}
+
 function navItems(readOnly: boolean) {
   const base = [
     { to: "/", label: "Dashboard", icon: Home, group: "Observe" },
@@ -394,6 +416,20 @@ function navItems(readOnly: boolean) {
     { to: "/settings", label: "Settings", icon: Settings, group: "Admin" },
   ];
   return base.filter((item) => !readOnly || !item.admin);
+}
+
+// Couch-triage priority for the 5 bottom-nav slots; anything not listed
+// fills remaining slots in sidebar order (matters for viewer accounts,
+// whose nav lacks the admin items).
+const MOBILE_NAV_ORDER = ["/", "/units", "/failed", "/updates", "/settings"];
+
+function mobileNavItems<T extends { to: string }>(items: T[]) {
+  const prioritized = MOBILE_NAV_ORDER.flatMap((to) => {
+    const item = items.find((i) => i.to === to);
+    return item ? [item] : [];
+  });
+  const rest = items.filter((i) => !MOBILE_NAV_ORDER.includes(i.to));
+  return [...prioritized, ...rest].slice(0, 5);
 }
 
 function groupedNavItems(items: Array<{ to: string; label: string; icon: React.ElementType; group?: string }>) {
@@ -627,6 +663,17 @@ function quadletCompletions(ctx: CompletionContext) {
   };
 }
 
+const unitFileLanguage = StreamLanguage.define({
+  token(stream) {
+    if (stream.sol() && stream.match(/^\s*[#;].*/)) return "comment";
+    if (stream.sol() && stream.match(/^\[[^\]]*\]\s*$/)) return "keyword";
+    if (stream.sol() && stream.match(/^[A-Za-z][\w.-]*(?=\s*=)/)) return "propertyName";
+    if (stream.match(/^=/)) return "operator";
+    stream.skipToEnd();
+    return null;
+  },
+});
+
 function CodeEditor({ value, onChange, readOnly, small, short, onSave }: { value: string; onChange: (value: string) => void; readOnly?: boolean; small?: boolean; short?: boolean; onSave?: () => void }) {
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -642,6 +689,7 @@ function CodeEditor({ value, onChange, readOnly, small, short, onSave }: { value
       history(),
       drawSelection(),
       indentOnInput(),
+      unitFileLanguage,
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       bracketMatching(),
       autocompletion({ override: [quadletCompletions] }),
@@ -820,7 +868,7 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
       });
       const results = body.results || [];
       const failed = results.filter((r) => !r.ok);
-      toast(failed.length ? `${action}: ${results.length - failed.length} ok, ${failed.length} failed` : `${action}: ${results.length} ok`, failed.length > 0);
+      toast(failed.length ? `${action}: ${results.length - failed.length} ok — ${failureSummary(failed)}` : `${action}: ${results.length} ok`, failed.length > 0);
       setSelected(new Set());
       reload();
     } catch (e) {
@@ -991,7 +1039,7 @@ function UnitDetail() {
     try {
       await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/action`, { method: "POST", body: JSON.stringify({ action }) });
       toast(`${action}: ok`);
-      load({ preserveDirty: false });
+      load();
     } catch (e) {
       toast(`${action}: ${(e as Error).message}`, true);
     } finally {
@@ -1259,10 +1307,10 @@ function LogsTab({ scope, name, aggregateMembers = false }: { scope: string; nam
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [lines]);
 
+  const needle = filter.trim().toLowerCase();
   const visible = useMemo(() => {
-    const needle = filter.toLowerCase();
     return needle ? lines.filter((line) => line.toLowerCase().includes(needle)) : lines;
-  }, [filter, lines]);
+  }, [needle, lines]);
   const text = visible.join("\n") + (visible.length ? "\n" : "");
 
   function download() {
@@ -1286,7 +1334,7 @@ function LogsTab({ scope, name, aggregateMembers = false }: { scope: string; nam
         <button className="btn btn-sm" onClick={() => navigator.clipboard.writeText(text)}><Check size={14} /> Copy</button>
         <button className="btn btn-sm" onClick={download}><Download size={14} /> Download</button>
       </div>
-      <pre ref={ref} className="output logs-output">{text || "connecting..."}</pre>
+      <pre ref={ref} className="output logs-output">{needle && visible.length ? visible.map((line, i) => <span key={i}>{highlightMatches(line, needle)}{"\n"}</span>) : (text || "connecting...")}</pre>
     </Panel>
   );
 }
@@ -1936,8 +1984,8 @@ function UpdatesView() {
       const { body } = await api<{ results?: Array<{ ok: boolean; scope: string; name: string; error?: string }> }>("/api/updates/apply", { method: "POST", body: JSON.stringify({ allDrifted: true }) });
       const results = body.results || [];
       const failed = results.filter((r) => !r.ok);
-      toast(failed.length ? `updates: ${results.length - failed.length} ok, ${failed.length} failed` : `updated ${results.length} units`, failed.length > 0);
-      setOperation({ title: "Applying image updates", lines: [`${results.length - failed.length} updated`, failed.length ? `${failed.length} failed` : "Refreshing update state"] });
+      toast(failed.length ? `updates: ${results.length - failed.length} ok — ${failureSummary(failed)}` : `updated ${results.length} units`, failed.length > 0);
+      setOperation({ title: "Applying image updates", lines: [`${results.length - failed.length} updated`, ...failed.map((r) => `failed: ${r.name} — ${r.error || "unknown error"}`)] });
       await check(false);
     } catch (e) {
       toast((e as Error).message, true);
@@ -2240,6 +2288,20 @@ function BackupSettings() {
   );
 }
 
+function downloadAuditCSV(events: AuditEvent[]) {
+  const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  const rows = ["time,actor,action,target,detail"];
+  for (const ev of events) {
+    rows.push([ev.createdAt || "", ev.actor || "system", ev.action, ev.target || "", ev.detail ? JSON.stringify(ev.detail) : ""].map(esc).join(","));
+  }
+  const url = URL.createObjectURL(new Blob([rows.join("\n") + "\n"], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "rookery-audit.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function AuditSettings() {
   const api = useApi();
   const { toast } = useApiContext();
@@ -2286,7 +2348,10 @@ function AuditSettings() {
         <MetricTile label="auth events" value={authEvents} tone={authEvents ? "ok" : "dim"} />
         <MetricTile label="admin events" value={adminEvents} tone={adminEvents ? "warn" : "dim"} />
       </div>
-      <Panel title="Audit log" icon={FileClock} action={<button className="btn btn-sm" onClick={load}><RefreshCw size={14} /> Refresh</button>}>
+      <Panel title="Audit log" icon={FileClock} action={<>
+        <button className="btn btn-sm" onClick={() => downloadAuditCSV(filtered)}><Download size={14} /> Export CSV</button>
+        <button className="btn btn-sm" onClick={load}><RefreshCw size={14} /> Refresh</button>
+      </>}>
         <div className="filterbar">
           <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter audit events..." /></label>
           <select className="input" value={actor} onChange={(e) => setActor(e.target.value)}>{actors.map((name) => <option key={name}>{name}</option>)}</select>

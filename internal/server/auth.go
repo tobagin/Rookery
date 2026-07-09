@@ -320,7 +320,11 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "no credentials are set — this instance is already open")
 		return
 	}
-	expiry := time.Now().Add(shareTTL)
+	ttl := s.shareTTL
+	if ttl <= 0 {
+		ttl = shareTTL
+	}
+	expiry := time.Now().Add(ttl)
 	token := s.mintShare(expiry)
 	s.audit(r, "share.create", "dashboard", map[string]any{"expires": expiry.Unix()})
 	writeJSON(w, http.StatusOK, map[string]any{

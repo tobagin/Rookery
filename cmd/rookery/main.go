@@ -62,6 +62,10 @@ func main() {
 		"directory for rookery's own files (rookery.db); default /etc/rookery rootful, ~/.config/rookery rootless")
 	sessionTTL := flag.Duration("session-ttl", envDurationOr("ROOKERY_SESSION_TTL", 24*time.Hour),
 		"idle timeout for login sessions (sliding)")
+	shareTTL := flag.Duration("share-ttl", envDurationOr("ROOKERY_SHARE_TTL", 7*24*time.Hour),
+		"lifetime of read-only share links")
+	auditRetention := flag.Duration("audit-retention", envDurationOr("ROOKERY_AUDIT_RETENTION", 0),
+		"prune audit events older than this on startup; 0 keeps everything")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	flagSet := visitedFlags()
@@ -83,6 +87,13 @@ func main() {
 	dbSettings, err := appdb.GetSettings(accounts.DB())
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *auditRetention > 0 {
+		if n, err := appdb.DeleteAuditEventsBefore(accounts.DB(), time.Now().Add(-*auditRetention)); err != nil {
+			log.Printf("audit retention prune failed: %v", err)
+		} else if n > 0 {
+			log.Printf("pruned %d audit events older than %s", n, *auditRetention)
+		}
 	}
 	dbApplied := applyDBSettings(dbSettings, flagSet, map[string]string{
 		"managedUsers":         "users",
@@ -171,6 +182,7 @@ func main() {
 		DisablePasswordLogin: *disablePasswordLogin,
 		OIDC:                 oidcClient,
 		SessionTTL:           *sessionTTL,
+		ShareTTL:             *shareTTL,
 		Settings:             buildSettings(effectiveDataDir, accounts.Path(), *listen, *users, *remotes, *alerts, *gitFlag, *sessionTTL, *disablePasswordLogin, *oidcIssuer, *oidcClientID, *oidcRedirectURL, *oidcName, *oidcAdmins, *oidcAdminGroups, *oidcDefaultRole, flagSet, dbApplied),
 	})
 
@@ -197,6 +209,9 @@ func main() {
 		labels[i] = a.Label
 	}
 	log.Printf("rookery %s listening on http://%s (scopes: %s)", version, *listen, strings.Join(labels, ", "))
+	if !isLoopback(*listen) {
+		log.Printf("WARNING: %s is not loopback and Rookery speaks plain HTTP — put a TLS reverse proxy in front before exposing it", *listen)
+	}
 	log.Fatal(http.ListenAndServe(*listen, srv))
 }
 
@@ -435,7 +450,7 @@ func bootstrapInitialAdmin(accounts *userstore.Store, password string, disablePa
 	}
 	err = accounts.CreateWithProfile(userstore.User{
 		Name:               "admin",
-		Email:              "admin@example.com",
+		Email:              "", // required at first-login onboarding via MustSetEmail
 		Role:               userstore.RoleAdmin,
 		MustChangePassword: generated,
 		MustSetEmail:       true,

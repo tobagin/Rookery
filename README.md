@@ -123,6 +123,8 @@ manage alice's rootless units).
 | `-disable-password-login` | `ROOKERY_DISABLE_PASSWORD_LOGIN` | `false` | disable local username/password login; requires OIDC |
 | `-data-dir` | `ROOKERY_DATA_DIR` | `/etc/rookery` (rootful) | where `rookery.db` lives |
 | `-session-ttl` | `ROOKERY_SESSION_TTL` | `24h` | idle timeout for login sessions (sliding) |
+| `-share-ttl` | `ROOKERY_SHARE_TTL` | `168h` | lifetime of read-only share links |
+| `-audit-retention` | `ROOKERY_AUDIT_RETENTION` | `0` | prune audit events older than this on startup; `0` keeps everything |
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
 | `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...`; `node.root=target,node.user=target` groups rootful/rootless targets under one fleet node |
 | `-alerts` | `ROOKERY_ALERTS` | — | failure alerts: `ntfy://host/topic`, `telegram://TOKEN@CHAT`, webhook URL |

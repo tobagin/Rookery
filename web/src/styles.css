@@ -307,6 +307,7 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
 .output.ok { border-color: rgba(46,160,67,.55); }
 .output.err { border-color: rgba(240,82,82,.55); }
 .logs-output { height: min(62vh, 560px); overflow: auto; }
+.logs-output mark { background: rgba(250, 204, 21, .45); color: inherit; border-radius: 2px; }
 .diff span { display: block; min-height: 1.4em; }
 .diff-add { color: #5de173; }
 .diff-del { color: #ff9d9d; }

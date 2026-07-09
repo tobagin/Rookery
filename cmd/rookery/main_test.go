@@ -50,7 +50,7 @@ func TestBootstrapInitialAdmin(t *testing.T) {
 	if !created || generated || pass != "configured-pass" {
 		t.Fatalf("bootstrap with configured password = created %t generated %t pass %q", created, generated, pass)
 	}
-	if u, ok := store.Get("admin"); !ok || u.Email != "admin@example.com" || !u.MustSetEmail || u.MustChangePassword {
+	if u, ok := store.Get("admin"); !ok || u.Email != "" || !u.MustSetEmail || u.MustChangePassword {
 		t.Fatalf("admin bootstrap profile = %#v, %v", u, ok)
 	}
 

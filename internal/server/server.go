@@ -93,6 +93,8 @@ type Options struct {
 	// SessionTTL is the idle timeout for login sessions (sliding); zero
 	// means 24h.
 	SessionTTL time.Duration
+	// ShareTTL is the lifetime of read-only share links; zero means 7 days.
+	ShareTTL time.Duration
 	// Settings describes effective deployment/auth/runtime settings for the
 	// admin settings API.
 	Settings []SettingGroup
@@ -132,6 +134,7 @@ type Server struct {
 	selinux       func() bool
 	gpus          func(ctx context.Context) []gpu.Device
 	sess          *sessions
+	shareTTL      time.Duration
 	settings      []SettingGroup
 	mux           *http.ServeMux
 }
@@ -157,6 +160,7 @@ func New(opts Options) *Server {
 		remoteGPUs:    opts.RemoteGPUs,
 		alertTest:     opts.AlertTest,
 		sess:          newSessions(opts.SessionTTL),
+		shareTTL:      opts.ShareTTL,
 		settings:      opts.Settings,
 		mux:           http.NewServeMux(),
 	}

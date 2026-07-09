@@ -48,3 +48,14 @@ func ListAuditEvents(db *sql.DB, limit int) ([]AuditEvent, error) {
 	}
 	return out, rows.Err()
 }
+
+// DeleteAuditEventsBefore prunes audit events older than cutoff and returns
+// how many rows were removed.
+func DeleteAuditEventsBefore(db *sql.DB, cutoff time.Time) (int64, error) {
+	res, err := db.Exec(`DELETE FROM audit_events WHERE datetime(created_at) < datetime(?)`,
+		cutoff.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
