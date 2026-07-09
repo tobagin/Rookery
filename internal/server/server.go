@@ -6,8 +6,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -262,8 +264,25 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("DELETE /api/secrets/{name}", s.handleDeleteSecret)
 	s.mux.HandleFunc("GET /api/images/stale", s.handleStaleImages)
 	s.mux.HandleFunc("POST /api/images/prune", s.handlePruneImages)
-	s.mux.Handle("GET /", http.FileServerFS(web.Files))
+	s.mux.Handle("GET /", spaFallback(web.Files))
 	return s
+}
+
+// spaFallback serves the embedded UI, rewriting unknown non-asset paths to
+// index.html so client-side routes like /units survive reload and deep links.
+func spaFallback(files fs.FS) http.Handler {
+	fileServer := http.FileServerFS(files)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p != "" {
+			if f, err := files.Open(p); err == nil {
+				f.Close()
+			} else {
+				r.URL.Path = "/"
+			}
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

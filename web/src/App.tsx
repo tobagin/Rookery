@@ -905,7 +905,7 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
           {(["all", "running", "failed", "pending", "stopped", "unknown"] as Array<UnitState | "all">).map((s) => (
             <button key={s} className={`status-pill ${status === s ? "active" : ""}`} onClick={() => setStatus(s)}>
               <span className={s === "all" ? "dot all" : `dot ${s}`} />
-              <span>{s}</span>
+              <span className="status-pill-label">{s}</span>
               <strong>{statusCounts[s]}</strong>
             </button>
           ))}
@@ -919,14 +919,16 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
         <label className="check density-toggle"><input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} /> compact rows</label>
       </div>
       {!auth.readOnly && filtered.length > 0 && (
-        <div className="action-row">
+        <div className="action-row bulk-row">
           <label className="check"><input type="checkbox" checked={selectedUnits.length === filtered.length && filtered.length > 0} onChange={(e) => selectAllVisible(e.target.checked)} /> select visible</label>
           {selectedUnits.length > 0 && <span className="badge">{selectedUnits.length} selected</span>}
           {["start", "stop", "restart"].map((a) => <button key={a} className="btn btn-sm" disabled={!selectedUnits.length || !!bulkBusy} onClick={() => bulkAction(a)}>{bulkBusy === a ? <RefreshCw className="spin" size={14} /> : actionIcon(a)} {a}</button>)}
         </div>
       )}
       {loading ? <p className="muted">Loading units...</p> : filtered.length ? (
-        <div className="unit-list">{filtered.map((u) => <div className="select-row" key={`${u.scope}/${u.name}`}>{!auth.readOnly && <input type="checkbox" checked={selected.has(`${u.scope}/${u.name}`)} onChange={(e) => toggleUnit(u, e.target.checked)} />}<UnitRow unit={u} onChanged={reload} compact={compact} /></div>)}</div>
+        <div className="unit-list">{filtered.map((u) => auth.readOnly
+          ? <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={reload} compact={compact} />
+          : <div className="select-row" key={`${u.scope}/${u.name}`}><input type="checkbox" checked={selected.has(`${u.scope}/${u.name}`)} onChange={(e) => toggleUnit(u, e.target.checked)} /><UnitRow unit={u} onChanged={reload} compact={compact} /></div>)}</div>
       ) : <EmptyState title="No matching units" text="Adjust the filters or create a new unit." />}
     </Page>
   );
@@ -1649,7 +1651,11 @@ function PoliciesView() {
             {severityOptions.map((s) => <option key={s} value={s}>{s} ({severityCounts[s] || 0})</option>)}
           </select></label>
         </div>
-        {loading ? <p className="muted">Scanning Quadlet files...</p> : filtered.length ? filtered.map((finding) => <PolicyRow key={finding.key} finding={finding} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <EmptyState title="No matching findings" text="Adjust the policy filters or clear waivers." />}
+        {/* finding.key alone is NOT unique: one unit emits several findings per
+            policy (one per bind mount / image), all sharing one waiver key.
+            Duplicate React keys made the list render stale/dropped rows whenever
+            the filters changed — the filter logic itself was never the bug. */}
+        {loading ? <p className="muted">Scanning Quadlet files...</p> : filtered.length ? filtered.map((finding) => <PolicyRow key={`${finding.key}:${finding.message}`} finding={finding} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <EmptyState title="No matching findings" text="Adjust the policy filters or clear waivers." />}
       </Panel>
     </Page>
   );
