@@ -1,4 +1,4 @@
-# 🦭 Rookery
+# <img src="assets/logo.svg" alt="" width="28" align="top"> Rookery
 
 **Quadlet-native web UI for Podman** — manage systemd containers, pods, and
 GPUs from your browser, with unit files on disk as the single source of truth.
