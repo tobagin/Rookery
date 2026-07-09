@@ -37,6 +37,22 @@ func fakeAgent(t *testing.T, token string, units []papi.Unit) *httptest.Server {
 		gotAction.action = r.PathValue("action")
 		_ = json.NewEncoder(w).Encode(papi.ActionResult{Unit: gotAction.name, Action: gotAction.action, OK: true})
 	}))
+	// One container + stats row per unit, labelled with its service, so the
+	// runtimeByService mapping has something to match.
+	mux.HandleFunc("GET "+papi.PathContainers, guard(func(w http.ResponseWriter, _ *http.Request) {
+		cs := make([]papi.Container, 0, len(units))
+		for _, u := range units {
+			cs = append(cs, papi.Container{ID: u.Name, Names: []string{u.Name}, Labels: map[string]string{"PODMAN_SYSTEMD_UNIT": u.Service}})
+		}
+		_ = json.NewEncoder(w).Encode(cs)
+	}))
+	mux.HandleFunc("GET "+papi.PathStats, guard(func(w http.ResponseWriter, _ *http.Request) {
+		st := make([]papi.Stat, 0, len(units))
+		for _, u := range units {
+			st = append(st, papi.Stat{ID: u.Name, Name: u.Name, CPUPct: 5, MemBytes: 1 << 20})
+		}
+		_ = json.NewEncoder(w).Encode(st)
+	}))
 	return httptest.NewServer(mux)
 }
 
@@ -99,6 +115,32 @@ func TestListUnitsViaAgent(t *testing.T) {
 	u := body.Units[0]
 	if u.Name != "ntfy.container" || u.Active != "active" || u.Scope != "pi" || !u.ReadOnly {
 		t.Errorf("agent unit mapped wrong: %+v", u)
+	}
+	// Stats from the agent's containers+stats must reach the unit.
+	if u.Stats == nil || u.Stats.CPUPct != 5 || u.Stats.MemBytes != 1<<20 {
+		t.Errorf("agent unit stats not attached: %+v", u.Stats)
+	}
+}
+
+func TestAgentStatsEndpoint(t *testing.T) {
+	units := []papi.Unit{
+		{Name: "ntfy.container", Service: "ntfy.service", Status: papi.Status{Active: "active"}},
+	}
+	ts := fakeAgent(t, "tok", units)
+	defer ts.Close()
+	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+
+	w := httptest.NewRecorder()
+	s.handleStats(w, httptest.NewRequest(http.MethodGet, "/api/stats", nil))
+	var body struct {
+		Stats map[string]unitStats `json:"stats"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	st, ok := body.Stats["pi/ntfy.container"]
+	if !ok || st.CPUPct != 5 {
+		t.Errorf("handleStats agent entry missing/wrong: %+v", body.Stats)
 	}
 }
 
