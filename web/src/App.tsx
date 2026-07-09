@@ -1509,7 +1509,7 @@ function UpdatesView() {
     }
   }
 
-  useEffect(() => { check(); }, []);
+  useEffect(() => { check(false); }, []);
 
   return (
     <Page title="Updates" kicker="Registry drift and stale image cleanup">

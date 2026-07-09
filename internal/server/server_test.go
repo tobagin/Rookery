@@ -181,8 +181,8 @@ func TestLicenseStatusCountsUniqueManagedNodes(t *testing.T) {
 	srv, _, _ := newTestServer(t, okValidator)
 	srv.areas = append(srv.areas,
 		Area{Label: "alice", Scope: systemd.Scope{User: "alice"}, Dirs: []string{t.TempDir()}},
-		Area{Label: "nas", Scope: systemd.Scope{SSH: "root@nas.local"}, Dirs: []string{"/etc/containers/systemd"}},
-		Area{Label: "nas-user", Scope: systemd.Scope{User: "podman", SSH: "root@nas.local"}, Dirs: []string{"/home/podman/.config/containers/systemd"}},
+		Area{Label: "nas.root", NodeID: "nas", Scope: systemd.Scope{SSH: "root@nas.local"}, Dirs: []string{"/etc/containers/systemd"}},
+		Area{Label: "nas.user", NodeID: "nas", Scope: systemd.Scope{User: "podman", SSH: "podman@nas.local"}, Dirs: []string{"/home/podman/.config/containers/systemd"}},
 	)
 	rec, body := doJSON(t, srv, "GET", "/api/license", "")
 	if rec.Code != http.StatusOK {
@@ -208,8 +208,8 @@ func TestLicenseStatusCountsUniqueManagedNodes(t *testing.T) {
 		t.Fatalf("ssoUserLimit = %d, want 0 for unlimited", got)
 	}
 	nodes := lic["nodes"].([]any)
-	if len(nodes) != 2 || nodes[0] != "local" || nodes[1] != "root@nas.local" {
-		t.Fatalf("nodes = %#v, want local/root@nas.local", nodes)
+	if len(nodes) != 2 || nodes[0] != "local" || nodes[1] != "nas" {
+		t.Fatalf("nodes = %#v, want local/nas", nodes)
 	}
 }
 

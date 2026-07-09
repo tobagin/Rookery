@@ -27,6 +27,9 @@ func (s *Server) licenseStatus() LicenseStatus {
 		if area.Remote() {
 			node = area.Scope.SSH
 		}
+		if area.NodeID != "" {
+			node = area.NodeID
+		}
 		if seen[node] {
 			continue
 		}
