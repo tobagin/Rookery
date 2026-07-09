@@ -252,6 +252,8 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
 .input, .searchbox {
   min-height: 36px; border: 1px solid var(--border); border-radius: 7px; background: var(--input); color: var(--text); padding: 7px 10px;
 }
+.field-label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; min-width: 180px; }
+.field-label .input { color: var(--text); font-size: 14px; }
 .searchbox { display: flex; align-items: center; gap: 8px; min-width: min(360px, 100%); }
 .searchbox input { background: transparent; border: 0; color: var(--text); outline: 0; min-width: 0; width: 100%; }
 .wide { width: min(680px, 100%); }

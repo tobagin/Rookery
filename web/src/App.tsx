@@ -1470,7 +1470,6 @@ function PoliciesView() {
   const [loading, setLoading] = useState(true);
   const [severity, setSeverity] = useState("all");
   const [visibility, setVisibility] = useState<"active" | "all" | "waived">("active");
-  const policySeverities = ["all", "critical", "warn", "info"];
   const load = useCallback(async () => {
     try {
       const { body } = await api<{ findings?: PolicyFinding[] }>("/api/policies");
@@ -1488,6 +1487,14 @@ function PoliciesView() {
   const warn = active.filter((f) => severityOf(f) === "warn").length;
   const waived = findings.length - active.length;
   const countSource = visibility === "active" ? active : visibility === "waived" ? findings.filter((f) => f.waived) : findings;
+  const severityOptions = useMemo(() => {
+    const seen = new Set(["all", "critical", "warn", "info"]);
+    countSource.forEach((finding) => {
+      const sev = severityOf(finding);
+      if (sev) seen.add(sev);
+    });
+    return Array.from(seen);
+  }, [countSource]);
   const severityCounts = useMemo(() => {
     const counts: Record<string, number> = { all: countSource.length, critical: 0, warn: 0, info: 0 };
     countSource.forEach((f) => {
@@ -1496,23 +1503,28 @@ function PoliciesView() {
     });
     return counts;
   }, [countSource]);
+  useEffect(() => {
+    if (!severityOptions.includes(severity)) setSeverity("all");
+  }, [severity, severityOptions]);
   const filtered = countSource.filter((finding) => severity === "all" || severityOf(finding) === severity);
   return (
     <Page title="Policy" kicker="Fleet checks">
       <div className="tiles">
-        <MetricTile label="active findings" value={active.length} tone={active.length ? "warn" : "dim"} active={visibility === "active" && severity === "all"} onClick={() => { setVisibility("active"); setSeverity("all"); }} />
-        <MetricTile label="critical" value={critical} tone={critical ? "bad" : "dim"} active={visibility === "active" && severity === "critical"} onClick={() => { setVisibility("active"); setSeverity("critical"); }} />
-        <MetricTile label="warnings" value={warn} tone={warn ? "warn" : "dim"} active={visibility === "active" && severity === "warn"} onClick={() => { setVisibility("active"); setSeverity("warn"); }} />
-        <MetricTile label="waived" value={waived} tone="dim" active={visibility === "waived"} onClick={() => { setVisibility("waived"); setSeverity("all"); }} />
+        <MetricTile label="active findings" value={active.length} tone={active.length ? "warn" : "dim"} />
+        <MetricTile label="critical" value={critical} tone={critical ? "bad" : "dim"} />
+        <MetricTile label="warnings" value={warn} tone={warn ? "warn" : "dim"} />
+        <MetricTile label="waived" value={waived} tone="dim" />
       </div>
       <Panel title={`Findings (${filtered.length}/${countSource.length})`} icon={Shield}>
         <div className="filterbar">
-          <div className="segmented text-segmented" aria-label="Policy severity filter">
-            {policySeverities.map((s) => <button type="button" key={s} className={severity === s ? "active" : ""} onClick={() => setSeverity(s)}>{s} <span>{severityCounts[s] || 0}</span></button>)}
-          </div>
-          <div className="segmented text-segmented" aria-label="Policy waiver filter">
-            {(["active", "all", "waived"] as const).map((s) => <button type="button" key={s} className={visibility === s ? "active" : ""} onClick={() => setVisibility(s)}>{s}</button>)}
-          </div>
+          <label className="field-label">Status<select className="input" value={visibility} onChange={(e) => setVisibility(e.target.value as "active" | "all" | "waived")}>
+            <option value="active">active ({active.length})</option>
+            <option value="all">all ({findings.length})</option>
+            <option value="waived">waived ({waived})</option>
+          </select></label>
+          <label className="field-label">Severity<select className="input" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+            {severityOptions.map((s) => <option key={s} value={s}>{s} ({severityCounts[s] || 0})</option>)}
+          </select></label>
         </div>
         {loading ? <p className="muted">Scanning Quadlet files...</p> : filtered.length ? filtered.map((finding) => <PolicyRow key={finding.key} finding={finding} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <EmptyState title="No matching findings" text="Adjust the policy filters or clear waivers." />}
       </Panel>
