@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	papi "github.com/rookerylabs/rookery-agent-api"
 	"github.com/rookerylabs/rookery/internal/agent"
+	"github.com/rookerylabs/rookery/internal/quadlet"
 	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
@@ -53,7 +56,33 @@ func fakeAgent(t *testing.T, token string, units []papi.Unit) *httptest.Server {
 		}
 		_ = json.NewEncoder(w).Encode(st)
 	}))
+	mux.HandleFunc("GET "+papi.PathUnitsPrefix+"{name}/file", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("[Container]\nImage=example.com/" + r.PathValue("name") + "\n"))
+	}))
+	mux.HandleFunc("GET "+papi.PathUnitsPrefix+"{name}/logs", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("line one\nline two\n"))
+	}))
+	mux.HandleFunc("PUT "+papi.PathUnitsPrefix+"{name}/file", guard(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotWrite = written{name: r.PathValue("name"), content: string(b)}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	}))
+	mux.HandleFunc("DELETE "+papi.PathUnitsPrefix+"{name}/file", guard(func(w http.ResponseWriter, r *http.Request) {
+		gotWrite = written{deleted: r.PathValue("name")}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	}))
 	return httptest.NewServer(mux)
+}
+
+// written captures the last file mutation the fake agent received.
+type written struct{ name, content, deleted string }
+
+var gotWrite written
+
+// validStub is a validation func that always passes, for save-path tests that
+// don't exercise the generator.
+func validStub(context.Context, bool, string, string) (quadlet.ValidationResult, error) {
+	return quadlet.ValidationResult{Valid: true}, nil
 }
 
 // recorded captures the last lifecycle call the fake agent received.
@@ -113,7 +142,7 @@ func TestListUnitsViaAgent(t *testing.T) {
 		t.Fatalf("got %d units, want 1", len(body.Units))
 	}
 	u := body.Units[0]
-	if u.Name != "ntfy.container" || u.Active != "active" || u.Scope != "pi" || !u.ReadOnly {
+	if u.Name != "ntfy.container" || u.Active != "active" || u.Scope != "pi" || u.ReadOnly {
 		t.Errorf("agent unit mapped wrong: %+v", u)
 	}
 	// Stats from the agent's containers+stats must reach the unit.
@@ -165,17 +194,110 @@ func TestAgentActionRoutesToAgent(t *testing.T) {
 	}
 }
 
-func TestAgentActionRejectsEnable(t *testing.T) {
-	ts := fakeAgent(t, "tok", nil)
+func TestGetUnitViaAgent(t *testing.T) {
+	units := []papi.Unit{{Name: "ntfy.container", Kind: "container", Service: "ntfy.service", Status: papi.Status{Active: "active"}}}
+	ts := fakeAgent(t, "tok", units)
 	defer ts.Close()
 	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
-	r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"action":"enable"}`))
+
+	r := httptest.NewRequest(http.MethodGet, "/api/units/pi/ntfy.container", nil)
 	r.SetPathValue("scope", "pi")
 	r.SetPathValue("name", "ntfy.container")
 	w := httptest.NewRecorder()
+	s.handleGetUnit(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", w.Code, w.Body)
+	}
+	var body struct {
+		Unit    unitJSON `json:"unit"`
+		Content string   `json:"content"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body.Content, "Image=example.com/ntfy.container") {
+		t.Errorf("content not from agent: %q", body.Content)
+	}
+	if body.Unit.Active != "active" || body.Unit.Image != "example.com/ntfy.container" {
+		t.Errorf("unit not enriched from agent+file: %+v", body.Unit)
+	}
+}
+
+func TestLogsViaAgent(t *testing.T) {
+	units := []papi.Unit{{Name: "ntfy.container", Service: "ntfy.service"}}
+	ts := fakeAgent(t, "tok", units)
+	defer ts.Close()
+	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+
+	r := httptest.NewRequest(http.MethodGet, "/api/logs/pi/ntfy.container", nil)
+	r.SetPathValue("scope", "pi")
+	r.SetPathValue("name", "ntfy.container")
+	w := httptest.NewRecorder()
+	s.handleLogs(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	// SSE: each journal line becomes a data: event.
+	body := w.Body.String()
+	if !strings.Contains(body, "data: line one") || !strings.Contains(body, "data: line two") {
+		t.Errorf("agent logs not streamed as SSE: %q", body)
+	}
+}
+
+func TestPutUnitViaAgent(t *testing.T) {
+	ts := fakeAgent(t, "tok", nil)
+	defer ts.Close()
+	gotWrite = written{}
+	s := &Server{
+		areas:    []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}},
+		validate: validStub,
+	}
+	r := httptest.NewRequest(http.MethodPut, "/api/units/pi/web.container",
+		strings.NewReader(`{"content":"[Container]\nImage=example.com/web\n"}`))
+	r.SetPathValue("scope", "pi")
+	r.SetPathValue("name", "web.container")
+	w := httptest.NewRecorder()
+	s.handlePutUnit(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", w.Code, w.Body)
+	}
+	if gotWrite.name != "web.container" || !strings.Contains(gotWrite.content, "Image=example.com/web") {
+		t.Errorf("agent did not receive the write: %+v", gotWrite)
+	}
+}
+
+func TestDeleteUnitViaAgent(t *testing.T) {
+	ts := fakeAgent(t, "tok", nil)
+	defer ts.Close()
+	gotWrite = written{}
+	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	r := httptest.NewRequest(http.MethodDelete, "/api/units/pi/web.container", nil)
+	r.SetPathValue("scope", "pi")
+	r.SetPathValue("name", "web.container")
+	w := httptest.NewRecorder()
+	s.handleDeleteUnit(w, r)
+	if w.Code != http.StatusOK || gotWrite.deleted != "web.container" {
+		t.Errorf("delete not routed to agent: code=%d %+v", w.Code, gotWrite)
+	}
+}
+
+func TestAgentEnableRewritesInstall(t *testing.T) {
+	// fakeAgent's GET file returns a unit with no [Install]; enable must add
+	// WantedBy and write it back through the agent.
+	ts := fakeAgent(t, "tok", nil)
+	defer ts.Close()
+	gotWrite = written{}
+	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"action":"enable"}`))
+	r.SetPathValue("scope", "pi")
+	r.SetPathValue("name", "web.container")
+	w := httptest.NewRecorder()
 	s.handleAction(w, r)
-	if w.Code != http.StatusNotImplemented {
-		t.Errorf("enable via agent: status %d, want 501", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("enable status %d, body %s", w.Code, w.Body)
+	}
+	if !strings.Contains(gotWrite.content, "WantedBy=default.target") {
+		t.Errorf("enable did not write [Install] WantedBy: %q", gotWrite.content)
 	}
 }
 

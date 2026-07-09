@@ -292,6 +292,10 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetUnit(w http.ResponseWriter, r *http.Request) {
+	if area, found := s.area(r.PathValue("scope")); found && area.ViaAgent() {
+		s.handleAgentGetUnit(w, r, area)
+		return
+	}
 	area, name, path, exists, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
@@ -316,6 +320,10 @@ func (s *Server) handleGetUnit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutUnit(w http.ResponseWriter, r *http.Request) {
+	if area, found := s.area(r.PathValue("scope")); found && area.ViaAgent() {
+		s.handleAgentPutUnit(w, r, area)
+		return
+	}
 	area, name, path, exists, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
@@ -424,6 +432,10 @@ func (s *Server) selinuxHints(content string) []string {
 }
 
 func (s *Server) handleDeleteUnit(w http.ResponseWriter, r *http.Request) {
+	if area, found := s.area(r.PathValue("scope")); found && area.ViaAgent() {
+		s.handleAgentDeleteUnit(w, r, area)
+		return
+	}
 	area, name, path, exists, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
@@ -458,6 +470,10 @@ func (s *Server) handleDeleteUnit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if area, found := s.area(r.PathValue("scope")); found && area.ViaAgent() {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "commits": []any{}})
+		return
+	}
 	area, name, _, _, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
@@ -475,6 +491,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHistoryShow(w http.ResponseWriter, r *http.Request) {
+	if area, found := s.area(r.PathValue("scope")); found && area.ViaAgent() {
+		httpError(w, http.StatusNotFound, "git history is not available for agent scopes")
+		return
+	}
 	area, name, _, _, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
@@ -497,6 +517,10 @@ func (s *Server) handleHistoryShow(w http.ResponseWriter, r *http.Request) {
 // blindly applied). It works for deleted units too — rollback recreates
 // the file in the primary directory.
 func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
+	if area, found := s.area(r.PathValue("scope")); found && area.ViaAgent() {
+		httpError(w, http.StatusNotFound, "git history is not available for agent scopes")
+		return
+	}
 	area, name, path, exists, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
@@ -865,6 +889,10 @@ func (s *Server) handleStopImportContainer(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if area, found := s.area(r.PathValue("scope")); found && area.ViaAgent() {
+		s.handleAgentLogs(w, r, area)
+		return
+	}
 	area, name, _, exists, ok := s.resolveUnit(w, r)
 	if !ok {
 		return
