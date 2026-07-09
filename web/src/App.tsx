@@ -452,16 +452,10 @@ function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
-// Full-body haul-out seal; eye and whiskers are fill-rule holes so the
-// mark renders in one currentColor on any background.
+// The Noto Emoji seal (Apache-2.0) on the brand badge — the same seal the
+// 🦭 emoji renders, but consistent across platforms and crisp at any size.
 function BrandMark() {
-  return (
-    <span className="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 32 22" fill="currentColor">
-        <path fillRule="evenodd" d="M3.6 9.6 C3.2 9.0 3.3 8.4 3.9 8.1 C4.6 7.7 5.3 7.6 5.9 7.4 C6.3 5.6 7.2 4.2 9.2 4.2 C11.4 4.2 12.6 5.8 13.0 7.6 C14.8 8.6 16.8 9.2 18.8 9.5 C21.8 9.9 24.2 9.7 25.9 9.0 C27.0 8.5 27.9 7.7 28.5 6.8 C29.1 5.9 30.0 5.4 30.9 5.5 C30.7 6.6 30.2 7.6 29.4 8.4 C30.3 8.9 30.9 9.8 31.1 10.9 C29.8 11.1 28.6 10.7 27.7 9.9 C25.6 13.0 22.0 15.4 17.8 16.1 C13.8 16.8 10.4 16.3 8.4 14.8 C8.6 15.8 9.3 16.7 10.5 17.2 C9.2 17.9 7.4 17.5 6.4 16.4 C5.6 15.5 5.3 14.2 5.5 13.0 C5.6 11.6 5.0 10.5 3.6 9.6 Z M7.4 6.4 m-0.8 0 a0.8 0.8 0 1 0 1.6 0 a0.8 0.8 0 1 0 -1.6 0 M4.9 8.5 m-0.32 0 a0.32 0.32 0 1 0 0.64 0 a0.32 0.32 0 1 0 -0.64 0 M5.7 9.1 m-0.32 0 a0.32 0.32 0 1 0 0.64 0 a0.32 0.32 0 1 0 -0.64 0 M4.8 9.7 m-0.32 0 a0.32 0.32 0 1 0 0.64 0 a0.32 0.32 0 1 0 -0.64 0" />
-      </svg>
-    </span>
-  );
+  return <img className="brand-mark" src="/logo.svg" alt="" aria-hidden="true" />;
 }
 
 function LoginView({ reloadAuth }: { reloadAuth: () => Promise<void> }) {

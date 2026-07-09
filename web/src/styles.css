@@ -114,12 +114,8 @@ h1, .kicker, h2, .tile-value, .tile-label, .unit-title, .nav-group-label, .chip,
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 750; font-size: 17px; padding: 4px 8px; }
 .sidebar .brand { color: #f7fafc; }
 .brand.large { justify-content: center; font-size: 22px; margin-bottom: 8px; }
-.brand-mark {
-  width: 30px; height: 30px; display: inline-grid; place-items: center; border: 1px solid rgba(81,214,200,.55);
-  border-radius: 7px; color: #06110f; background: #51d6c8; flex: none;
-}
-.brand-mark svg { width: 76%; height: 76%; }
-.brand.large .brand-mark { width: 40px; height: 40px; border-radius: 9px; }
+.brand-mark { width: 30px; height: 30px; flex: none; display: inline-block; }
+.brand.large .brand-mark { width: 40px; height: 40px; }
 .app-shell.sidebar-collapsed .sidebar { align-items: center; padding-inline: 10px; }
 .app-shell.sidebar-collapsed .sidebar-brand-row { flex-direction: column; }
 .app-shell.sidebar-collapsed .brand { padding-inline: 5px; }
