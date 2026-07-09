@@ -119,6 +119,10 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadRequest, "backup references unknown scope "+parts[1])
 			return
 		}
+		if area.ViaAgent() {
+			httpError(w, http.StatusBadRequest, "restoring to agent scopes is not supported yet")
+			return
+		}
 		name := parts[2]
 		target := joinUnitPath(area, area.Dirs[0], name)
 		_, warnings, saved, err := s.applySave(r, area, name, target, string(data), false, "rookery: restore "+name)
@@ -217,6 +221,10 @@ func (s *Server) restoreChanges(r *http.Request, files map[string][]byte, manife
 		name := parts[2]
 		if err := quadlet.CheckName(name); err != nil {
 			return nil, err
+		}
+		if area.ViaAgent() {
+			changes = append(changes, restorePreview{Path: p, Scope: area.Label, Name: name, Action: "unsupported"})
+			continue
 		}
 		action := "add"
 		target := joinUnitPath(area, area.Dirs[0], name)

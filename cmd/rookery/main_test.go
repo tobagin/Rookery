@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rookerylabs/rookery/internal/agent"
+	"github.com/rookerylabs/rookery/internal/server"
 	"github.com/rookerylabs/rookery/internal/userstore"
 )
 
@@ -87,5 +89,19 @@ func TestBootstrapInitialAdmin(t *testing.T) {
 	}
 	if u, ok := generatedStore.Get("admin"); !ok || !u.MustChangePassword || !u.MustSetEmail {
 		t.Fatalf("generated bootstrap profile = %#v, %v", u, ok)
+	}
+}
+
+// TestAttachGitSkipsAgentAreas guards the startup crash where attachGit did
+// area.Dirs[0] on an agent area (empty Dirs) and panicked, crash-looping
+// rookery. Agent areas must be skipped, not indexed.
+func TestAttachGitSkipsAgentAreas(t *testing.T) {
+	areas := []server.Area{
+		{Label: "local", Dirs: []string{t.TempDir()}},
+		{Label: "pi", Agent: agent.New("http://127.0.0.1:1", "tok")}, // empty Dirs
+	}
+	attachGit(areas, false) // must not panic
+	if areas[1].Git != nil {
+		t.Error("agent area must not get a git store")
 	}
 }

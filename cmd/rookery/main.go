@@ -583,6 +583,9 @@ func groupedRemoteScope(scope string) bool {
 // never git-inits someone else's host.
 func attachGit(areas []server.Area, force bool) {
 	for i := range areas {
+		if areas[i].ViaAgent() {
+			continue // agent areas have no local dir and keep no git
+		}
 		var store *gitstore.Store
 		var err error
 		if areas[i].Remote() {

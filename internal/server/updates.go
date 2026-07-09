@@ -264,6 +264,11 @@ func (s *Server) handleApplyUpdates(w http.ResponseWriter, r *http.Request) {
 				results[i] = res
 				return
 			}
+			if area.ViaAgent() {
+				res.Error = "image updates are not supported on agent scopes yet"
+				results[i] = res
+				return
+			}
 			target := joinUnitPath(area, area.Dirs[0], ref.Name)
 			if ok, err := areaExists(r.Context(), area, target); err != nil {
 				res.Error = err.Error()
