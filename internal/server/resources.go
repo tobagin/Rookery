@@ -36,35 +36,59 @@ type resourceJSON struct {
 func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	out := []resourceJSON{}
 	scopeErrors := map[string]string{}
-	rp, ok := s.pod.(resourcesAPI)
-	if ok && s.pod != nil {
-		for _, area := range s.areasSnapshot() {
-			if area.Remote() || area.ViaAgent() || !area.Scope.IsSystem() {
-				continue
-			}
-			managed := s.managedResourceNames(r.Context(), area)
-			node := areaNodeID(area)
-			if nets, err := rp.Networks(r.Context()); err != nil {
-				scopeErrors[area.Label] = err.Error()
-			} else {
-				for _, n := range nets {
-					detail := ""
-					if len(n.Subnets) > 0 {
-						detail = n.Subnets[0].Subnet
-					}
-					out = append(out, resourceJSON{Kind: "network", Name: n.Name, Scope: area.Label, Node: node, Driver: n.Driver, Detail: detail, Managed: managed["network:"+n.Name]})
-				}
-			}
-			if vols, err := rp.Volumes(r.Context()); err != nil {
-				scopeErrors[area.Label] = err.Error()
-			} else {
-				for _, v := range vols {
-					out = append(out, resourceJSON{Kind: "volume", Name: v.Name, Scope: area.Label, Node: node, Driver: v.Driver, Detail: v.Mountpoint, Managed: managed["volume:"+v.Name]})
-				}
-			}
+	for _, area := range s.areasSnapshot() {
+		switch {
+		case area.ViaAgent():
+			// Remote and rootless-local scopes are served by a rookery-agent,
+			// which computes managed itself (it has the podman store + units).
+			out = s.appendAgentResources(r, area, out, scopeErrors)
+		case !area.Remote() && area.Scope.IsSystem():
+			// The local rootful scope is the one the single s.pod client backs.
+			out = s.appendLocalResources(r, area, out, scopeErrors)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"resources": out, "scopeErrors": scopeErrors})
+}
+
+func (s *Server) appendLocalResources(r *http.Request, area Area, out []resourceJSON, scopeErrors map[string]string) []resourceJSON {
+	rp, ok := s.pod.(resourcesAPI)
+	if !ok || s.pod == nil {
+		return out
+	}
+	managed := s.managedResourceNames(r.Context(), area)
+	node := areaNodeID(area)
+	if nets, err := rp.Networks(r.Context()); err != nil {
+		scopeErrors[area.Label] = err.Error()
+	} else {
+		for _, n := range nets {
+			detail := ""
+			if len(n.Subnets) > 0 {
+				detail = n.Subnets[0].Subnet
+			}
+			out = append(out, resourceJSON{Kind: "network", Name: n.Name, Scope: area.Label, Node: node, Driver: n.Driver, Detail: detail, Managed: managed["network:"+n.Name]})
+		}
+	}
+	if vols, err := rp.Volumes(r.Context()); err != nil {
+		scopeErrors[area.Label] = err.Error()
+	} else {
+		for _, v := range vols {
+			out = append(out, resourceJSON{Kind: "volume", Name: v.Name, Scope: area.Label, Node: node, Driver: v.Driver, Detail: v.Mountpoint, Managed: managed["volume:"+v.Name]})
+		}
+	}
+	return out
+}
+
+func (s *Server) appendAgentResources(r *http.Request, area Area, out []resourceJSON, scopeErrors map[string]string) []resourceJSON {
+	res, err := area.Agent.Resources(r.Context(), area.AgentScope)
+	if err != nil {
+		scopeErrors[area.Label] = err.Error()
+		return out
+	}
+	node := areaNodeID(area)
+	for _, rr := range res {
+		out = append(out, resourceJSON{Kind: rr.Kind, Name: rr.Name, Scope: area.Label, Node: node, Driver: rr.Driver, Detail: rr.Detail, Managed: rr.Managed})
+	}
+	return out
 }
 
 // managedResourceNames returns the podman resource identities a Quadlet unit in

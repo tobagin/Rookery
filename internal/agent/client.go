@@ -93,6 +93,13 @@ func (c *Client) Stats(ctx context.Context, scope string) ([]api.Stat, error) {
 	return st, err
 }
 
+// Resources lists a scope's live podman networks and volumes.
+func (c *Client) Resources(ctx context.Context, scope string) ([]api.Resource, error) {
+	var res []api.Resource
+	err := c.do(ctx, http.MethodGet, scoped(api.PathResources, scope), &res)
+	return res, err
+}
+
 // Action runs a lifecycle verb against a unit or service in a scope.
 func (c *Client) Action(ctx context.Context, scope, unit, action string) error {
 	if !api.ValidAction(action) {
