@@ -11,6 +11,7 @@ import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutt
 import {
   Activity,
   AlertTriangle,
+  Box,
   Boxes,
   Check,
   ChevronLeft,
@@ -934,6 +935,22 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
   );
 }
 
+// KindIcon maps a Quadlet kind to a glyph, so rows show a type icon instead of
+// a text pill. Container/image/build/kube share the box; pods, networks and
+// volumes get their own.
+function KindIcon({ kind, size = 13 }: { kind: string; size?: number }) {
+  switch (kind) {
+    case "pod":
+      return <Boxes size={size} />;
+    case "network":
+      return <Network size={size} />;
+    case "volume":
+      return <HardDrive size={size} />;
+    default:
+      return <Box size={size} />;
+  }
+}
+
 function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: () => void; compact?: boolean }) {
   const { auth, toast } = useApiContext();
   const api = useApi();
@@ -967,9 +984,11 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
         {!compact && <span className="unit-sub">{unit.description || unit.image || unit.path || ""}</span>}
       </span>
       <span className="badges">
-        <StatusBadge state={cls} label={stateLabel(unit)} />
-        <span className="badge">{unit.kind}</span>
-        <span className={scopeKind === "rootful" ? "badge" : "badge badge-user"}>{scopeKind}</span>
+        {/* status is already shown by the row dot; kind + privilege are icons */}
+        <span className="unit-tag" title={unit.kind} aria-label={unit.kind}><KindIcon kind={unit.kind} /></span>
+        <span className={`unit-tag priv-${scopeKind}`} title={scopeKind} aria-label={scopeKind}>
+          {scopeKind === "rootful" ? <Shield size={13} /> : <UserRound size={13} />}
+        </span>
         {unit.scope !== "system" && <span className="badge badge-user">{unit.scope}</span>}
         {!!unit.restarts && <span className="badge badge-warn">restart {unit.restarts}</span>}
         {unit.health && <span className={`badge ${unit.health === "unhealthy" ? "badge-failed" : unit.health === "healthy" ? "badge-running" : "badge-warn"}`}>{unit.health}</span>}
