@@ -286,6 +286,9 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   const [newUnitOpen, setNewUnitOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("rookery-sidebar") === "collapsed");
   const nav = navItems(auth.readOnly);
+  // The Manage page currently open, if any — drives the context-aware "+ Add"
+  // button in the header (Add container on /containers, Add network on /networks…).
+  const currentView = RESOURCE_VIEWS.find((v) => isActive(location.pathname, v.path));
   // Per-type counts for the sidebar so a newcomer sees the system's shape at a
   // glance (and a "0" invites the first create). ponytail: reuses the units
   // poll; lift to a shared context only if the double-fetch shows up as load.
@@ -352,7 +355,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
           </div>
           <div className="top-actions">
             <ThemeSwitch theme={theme} setTheme={setTheme} />
-            {!auth.readOnly && <button className="btn btn-accent" onClick={() => setNewUnitOpen(true)}><Plus size={16} /> New unit</button>}
+            {!auth.readOnly && currentView && <button className="btn btn-accent" onClick={() => setNewUnitOpen(true)}><Plus size={16} /> Add {currentView.singular}</button>}
             {!auth.readOnly && auth.required && auth.authenticated && <button className="btn btn-ghost" onClick={copyShare}><Github size={16} /> Share</button>}
             <button className="btn icon-only mobile-more" onClick={() => setMoreOpen((v) => !v)} aria-label="More"><Menu size={18} /></button>
           </div>
@@ -369,8 +372,8 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
         {mobileNavItems(nav).map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} compact />)}
       </nav>
       {newUnitOpen && (
-        <Overlay title="New unit" onClose={() => setNewUnitOpen(false)}>
-          <NewUnitForm onCreated={() => setNewUnitOpen(false)} />
+        <Overlay title={`New ${currentView?.singular || "unit"}`} onClose={() => setNewUnitOpen(false)}>
+          <NewUnitForm initialKind={currentView?.singular} onCreated={() => setNewUnitOpen(false)} />
         </Overlay>
       )}
     </div>
@@ -422,13 +425,16 @@ function failureSummary(failed: Array<{ name: string; error?: string }>) {
 // `kinds` is the set of unit kinds this page owns; `blurb` teaches a newcomer
 // what the type is (shown on the empty state). Every kind maps to exactly one
 // view via viewForKind, so no unit falls through.
-type ResourceView = { path: string; label: string; singular: string; icon: React.ElementType; kinds: string[]; catchAll?: boolean; blurb: string };
+// `runnable` marks types with a running/stopped lifecycle (containers, pods) —
+// only those get the running/failed/stopped status filter. Networks and volumes
+// are declarative resources that just exist, so the pills don't apply.
+type ResourceView = { path: string; label: string; singular: string; icon: React.ElementType; kinds: string[]; catchAll?: boolean; runnable?: boolean; blurb: string };
 const RESOURCE_VIEWS: ResourceView[] = [
-  { path: "/containers", label: "Containers", singular: "container", icon: Container, kinds: ["container"], catchAll: true, blurb: "A container runs one service from an image." },
-  { path: "/pods", label: "Pods", singular: "pod", icon: Boxes, kinds: ["pod", "kube"], blurb: "A pod groups containers that share a network and start and stop together." },
-  { path: "/networks", label: "Networks", singular: "network", icon: Network, kinds: ["network"], blurb: "A network lets containers reach each other by name." },
-  { path: "/volumes", label: "Volumes", singular: "volume", icon: HardDrive, kinds: ["volume"], blurb: "A volume stores data that outlives the container that writes it." },
-  { path: "/images", label: "Images", singular: "image", icon: Layers, kinds: ["image", "build"], blurb: "An image is the read-only template a container runs from." },
+  { path: "/containers", label: "Containers", singular: "container", icon: Container, kinds: ["container"], catchAll: true, runnable: true, blurb: "One service running from an image." },
+  { path: "/pods", label: "Pods", singular: "pod", icon: Boxes, kinds: ["pod", "kube"], runnable: true, blurb: "Containers grouped and managed together." },
+  { path: "/networks", label: "Networks", singular: "network", icon: Network, kinds: ["network"], blurb: "Lets containers reach each other by name." },
+  { path: "/volumes", label: "Volumes", singular: "volume", icon: HardDrive, kinds: ["volume"], blurb: "Storage that outlives the container." },
+  { path: "/images", label: "Images", singular: "image", icon: Layers, kinds: ["image", "build"], blurb: "The templates your containers run from." },
 ];
 
 // Which Manage page owns a given unit kind. Anything unmapped (incl. plain
@@ -931,18 +937,20 @@ function UnitsPage({ view }: { view: ResourceView }) {
 
   const addBtn = !auth.readOnly && <Link className="btn btn-accent" to={`/new?kind=${view.singular}`}><Plus size={16} /> Add {view.singular}</Link>;
   return (
-    <Page title={view.label} kicker={view.blurb} action={addBtn}>
+    <Page title={view.label} subtitle={view.blurb}>
       <ScopeErrors errors={scopeErrors} />
       {error && <p className="banner banner-error">{error}</p>}
-      <div className="status-filter" aria-label="Filter by status">
-        {(["all", "running", "failed", "pending", "stopped", "unknown"] as Array<UnitState | "all">).map((s) => (
-          <button key={s} className={`status-pill ${status === s ? "active" : ""}`} onClick={() => setStatus(s)}>
-            <span className={s === "all" ? "dot all" : `dot ${s}`} />
-            <span className="status-pill-label">{s}</span>
-            <strong>{statusCounts[s]}</strong>
-          </button>
-        ))}
-      </div>
+      {view.runnable && (
+        <div className="status-filter" aria-label="Filter by status">
+          {(["all", "running", "failed", "pending", "stopped", "unknown"] as Array<UnitState | "all">).map((s) => (
+            <button key={s} className={`status-pill ${status === s ? "active" : ""}`} onClick={() => setStatus(s)}>
+              <span className={s === "all" ? "dot all" : `dot ${s}`} />
+              <span className="status-pill-label">{s}</span>
+              <strong>{statusCounts[s]}</strong>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="filterbar units-filterbar">
         <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter ${view.label.toLowerCase()} by name, image, pod...`} /></label>
         <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
@@ -1768,24 +1776,26 @@ function PolicyRow({ finding, editable, onChanged }: { finding: PolicyFinding; e
 }
 
 function NewUnit() {
+  const [params] = useSearchParams();
   return (
     <Page title="New unit" kicker="Create a Quadlet from a starter template" back={<BackButton />}>
       <Panel title="Definition" icon={Plus}>
-        <NewUnitForm />
+        <NewUnitForm initialKind={params.get("kind") || undefined} />
       </Panel>
     </Page>
   );
 }
 
-function NewUnitForm({ onCreated }: { onCreated?: () => void }) {
+function NewUnitForm({ onCreated, initialKind }: { onCreated?: () => void; initialKind?: string }) {
   const api = useApi();
   const { toast } = useApiContext();
   const navigate = useNavigate();
+  const startKind = initialKind && TEMPLATES[initialKind] ? initialKind : "container";
   const [scopes, setScopes] = useState(["system"]);
-  const [kind, setKind] = useState("container");
+  const [kind, setKind] = useState(startKind);
   const [scope, setScope] = useState("system");
   const [baseName, setBaseName] = useState("");
-  const [content, setContent] = useState(TEMPLATES.container);
+  const [content, setContent] = useState(TEMPLATES[startKind]);
   const [validation, setValidation] = useState<{ validation?: ValidationResult; hints?: string[] } | null>(null);
   const dirty = baseName.trim() !== "" || content !== TEMPLATES[kind];
   useDirtyGuard(dirty);
@@ -1989,7 +1999,7 @@ function ImportResult({ unit, scope, sourceContainer = "" }: { unit: { name: str
 // are "mostly an image thing").
 function ImagesView({ view }: { view: ResourceView }) {
   const api = useApi();
-  const { auth, toast } = useApiContext();
+  const { toast } = useApiContext();
   const { units, reload: reloadUnits } = useUnits(true);
   const imageUnits = units.filter((u) => viewForKind(u.kind) === "/images");
   const [params, setParams] = useSearchParams();
@@ -2085,7 +2095,7 @@ function ImagesView({ view }: { view: ResourceView }) {
   useEffect(() => { check(false); }, []);
 
   return (
-    <Page title={view.label} kicker="Image units, registry drift, and stale cleanup" action={!auth.readOnly && <Link className="btn btn-accent" to="/new?kind=image"><Plus size={16} /> Add image</Link>}>
+    <Page title={view.label} subtitle="Image units, updates, and cleanup">
       {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
       <Panel title="Image units" icon={Layers}>
         {imageUnits.length ? imageUnits.map((u) => <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={reloadUnits} compact />) : <p className="muted">No .image or .build units yet — add one to pre-pull or build an image.</p>}
@@ -2725,11 +2735,11 @@ function SettingControl({ item, value, onChange }: { item: SettingItem; value: u
   );
 }
 
-function Page({ title, kicker, action, back, children }: { title: string; kicker?: string; action?: React.ReactNode; back?: React.ReactNode; children: React.ReactNode }) {
+function Page({ title, kicker, subtitle, action, back, children }: { title: string; kicker?: string; subtitle?: string; action?: React.ReactNode; back?: React.ReactNode; children: React.ReactNode }) {
   return (
     <>
       <div className="page-head">
-        <div className="title-row">{back}<div><p className="kicker">{kicker}</p><h1>{title}</h1></div></div>
+        <div className="title-row">{back}<div>{kicker && <p className="kicker">{kicker}</p>}<h1>{title}</h1>{subtitle && <p className="subtitle">{subtitle}</p>}</div></div>
         {action && <div className="page-actions">{action}</div>}
       </div>
       {children}

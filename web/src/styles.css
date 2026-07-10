@@ -188,6 +188,7 @@ h1, .kicker, h2, .tile-value, .tile-label, .unit-title, .nav-group-label, .chip,
 .page-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; margin: 2px 0 18px; }
 .title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .kicker { color: var(--muted); text-transform: uppercase; letter-spacing: .14em; font-size: 10.5px; margin: 0 0 3px; }
+.subtitle { color: var(--muted); font-size: 13px; margin: 3px 0 0; }
 h1 { font-size: 24px; line-height: 1.15; margin: 0; letter-spacing: -0.02em; font-weight: 640; }
 h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-2); }
 
