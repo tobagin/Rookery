@@ -1063,17 +1063,17 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
         <span className="unit-title">{displayName(unit.name)}</span>
         {!compact && <span className="unit-sub">{unit.description || unit.image || unit.path || ""}</span>}
       </span>
+      {/* consistent left-to-right: node, privilege, pod, cpu, gpu, health, restarts */}
       <span className="badges">
-        {unit.node && <RowChip icon={Server} color={nodeColor(unit.node)} label={`node ${unit.node}`} />}
+        {unit.node && <RowChip icon={Server} color={nodeColor(unit.node)} label={`node ${unit.node}`}>node <b>{unit.node}</b> · {unit.scope}{unit.scopeUser ? ` (${unit.scopeUser})` : ""}</RowChip>}
         <RowChip icon={scopeKind === "rootful" ? Shield : UserRound} tone={`priv-${scopeKind}`} label={scopeKind} />
-        {unit.scope !== "system" && <span className="badge badge-user">{unit.scope}</span>}
         {unit.pod && <RowChip icon={Boxes} label={`pod ${unit.pod}`}>
           <button type="button" className="pop-link" onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/unit/${encodeURIComponent(unit.scope)}/${encodeURIComponent(unit.pod!)}`); }}>{displayName(unit.pod)}</button>
         </RowChip>}
         {unit.stats && <RowChip icon={Cpu} label="usage">cpu {(unit.stats.cpuPct || 0).toFixed(1)}%{unit.stats.memBytes ? ` · mem ${fmtBytes(unit.stats.memBytes)}` : ""}</RowChip>}
         {!!unit.gpus?.length && <RowChip icon={Gpu} tone="gpu" label="gpu">{unit.gpus.join(", ")}</RowChip>}
-        {!!unit.restarts && <span className="badge badge-warn">restart {unit.restarts}</span>}
-        {unit.health && <span className={`badge ${unit.health === "unhealthy" ? "badge-failed" : unit.health === "healthy" ? "badge-running" : "badge-warn"}`}>{unit.health}</span>}
+        {unit.health && <RowChip icon={Activity} color={unit.health === "unhealthy" ? "var(--bad)" : unit.health === "healthy" ? "var(--ok)" : "var(--warn)"} label="health">{unit.health}</RowChip>}
+        {!!unit.restarts && <RowChip icon={RotateCcw} color="var(--warn)" label="restarts">restarted {unit.restarts}×</RowChip>}
       </span>
       {!auth.readOnly && (
         <span className="row-actions">
