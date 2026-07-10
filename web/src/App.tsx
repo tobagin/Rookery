@@ -1108,7 +1108,6 @@ function ResourceDetail({ res, onClose }: { res: Resource; onClose: () => void }
   const [detail, setDetail] = useState<{ fields: { key: string; value: string }[]; usedBy: string[] } | null>(null);
   const [note, setNote] = useState("");
   useEffect(() => {
-    if (res.scope !== "system") { setNote("Detailed inspect is available on the control-plane host for now."); return; }
     api<{ fields: { key: string; value: string }[]; usedBy: string[] }>(`/api/resources/inspect?scope=${encodeURIComponent(res.scope)}&kind=${encodeURIComponent(res.kind)}&name=${encodeURIComponent(res.name)}`)
       .then(({ body }) => setDetail(body)).catch((e) => setNote((e as Error).message));
   }, [api, res]);

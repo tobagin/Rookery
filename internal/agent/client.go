@@ -106,6 +106,14 @@ func (c *Client) DeleteResource(ctx context.Context, scope, kind, name string) e
 	return c.do(ctx, http.MethodDelete, path, nil)
 }
 
+// InspectResource returns the raw podman inspect JSON for a resource in a scope.
+func (c *Client) InspectResource(ctx context.Context, scope, kind, name string) ([]byte, error) {
+	path := api.PathResources + "/inspect?" + api.ScopeParam + "=" + url.QueryEscape(scope) + "&kind=" + url.QueryEscape(kind) + "&name=" + url.QueryEscape(name)
+	var raw json.RawMessage
+	err := c.do(ctx, http.MethodGet, path, &raw)
+	return raw, err
+}
+
 // Action runs a lifecycle verb against a unit or service in a scope.
 func (c *Client) Action(ctx context.Context, scope, unit, action string) error {
 	if !api.ValidAction(action) {

@@ -130,32 +130,25 @@ type resourceField struct {
 	Value string `json:"value"`
 }
 
-// handleInspectResource returns display fields + "used by" for one resource.
-// ponytail: local rootful scope only (via s.pod); the overlay shows the list
-// fields for remote/rootless scopes until the agent grows an inspect endpoint.
-func (s *Server) handleInspectResource(w http.ResponseWriter, r *http.Request) {
-	scope, kind, name := r.URL.Query().Get("scope"), r.URL.Query().Get("kind"), r.URL.Query().Get("name")
-	if scope == "" || kind == "" || name == "" {
-		httpError(w, http.StatusBadRequest, "scope, kind, and name are required")
-		return
+type containerRef struct{ Image, Name string }
+
+func inspectByKind(ins resourceInspector, ctx context.Context, kind, name string) ([]byte, error) {
+	switch kind {
+	case "network":
+		return ins.InspectNetwork(ctx, name)
+	case "volume":
+		return ins.InspectVolume(ctx, name)
+	case "image":
+		return ins.InspectImage(ctx, name)
 	}
-	var area *Area
-	for _, a := range s.areasSnapshot() {
-		if a.Label == scope {
-			found := a
-			area = &found
-			break
-		}
-	}
-	if area == nil || area.ViaAgent() || area.Remote() || !area.Scope.IsSystem() {
-		httpError(w, http.StatusBadRequest, "detailed inspect is available on the control-plane host only")
-		return
-	}
-	ins, ok := s.pod.(resourceInspector)
-	if !ok || s.pod == nil {
-		httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
-		return
-	}
+	return nil, fmt.Errorf("unknown resource kind %q", kind)
+}
+
+// buildResourceDetail turns a raw podman inspect body into display fields +
+// "used by". Networks list their attached containers from the inspect itself;
+// images match against the scope's container list. Shared by the local and
+// agent paths so both render identically.
+func buildResourceDetail(kind, name string, raw []byte, containers []containerRef) ([]resourceField, []string) {
 	fields := []resourceField{}
 	usedBy := []string{}
 	add := func(m map[string]any, jsonKey, label string) {
@@ -165,11 +158,6 @@ func (s *Server) handleInspectResource(w http.ResponseWriter, r *http.Request) {
 	}
 	switch kind {
 	case "network":
-		raw, err := ins.InspectNetwork(r.Context(), name)
-		if err != nil {
-			httpError(w, http.StatusBadGateway, err.Error())
-			return
-		}
 		var n map[string]any
 		json.Unmarshal(raw, &n)
 		add(n, "driver", "driver")
@@ -193,11 +181,6 @@ func (s *Server) handleInspectResource(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case "volume":
-		raw, err := ins.InspectVolume(r.Context(), name)
-		if err != nil {
-			httpError(w, http.StatusBadGateway, err.Error())
-			return
-		}
 		var v map[string]any
 		json.Unmarshal(raw, &v)
 		add(v, "Driver", "driver")
@@ -211,15 +194,11 @@ func (s *Server) handleInspectResource(w http.ResponseWriter, r *http.Request) {
 			fields = append(fields, resourceField{"labels", strings.Join(parts, ", ")})
 		}
 	case "image":
-		raw, err := ins.InspectImage(r.Context(), name)
-		if err != nil {
-			httpError(w, http.StatusBadGateway, err.Error())
-			return
-		}
 		var im map[string]any
 		json.Unmarshal(raw, &im)
 		if id, ok := im["Id"].(string); ok {
-			fields = append(fields, resourceField{"id", strings.TrimPrefix(id, "sha256:")[:min(12, len(strings.TrimPrefix(id, "sha256:")))]})
+			trimmed := strings.TrimPrefix(id, "sha256:")
+			fields = append(fields, resourceField{"id", trimmed[:min(12, len(trimmed))]})
 		}
 		add(im, "Created", "created")
 		if arch, ok := im["Architecture"].(string); ok {
@@ -229,17 +208,75 @@ func (s *Server) handleInspectResource(w http.ResponseWriter, r *http.Request) {
 		if size, ok := im["Size"].(float64); ok {
 			fields = append(fields, resourceField{"size", humanBytes(int64(size))})
 		}
-		if conts, err := ins.Containers(r.Context()); err == nil {
-			for _, c := range conts {
-				if c.Image == name {
-					usedBy = append(usedBy, c.Name())
+		for _, c := range containers {
+			if c.Image == name {
+				usedBy = append(usedBy, c.Name)
+			}
+		}
+	}
+	return fields, usedBy
+}
+
+// handleInspectResource returns display fields + "used by" for one resource,
+// via s.pod for the local rootful scope or the agent for remote/rootless scopes.
+func (s *Server) handleInspectResource(w http.ResponseWriter, r *http.Request) {
+	scope, kind, name := r.URL.Query().Get("scope"), r.URL.Query().Get("kind"), r.URL.Query().Get("name")
+	if scope == "" || kind == "" || name == "" {
+		httpError(w, http.StatusBadRequest, "scope, kind, and name are required")
+		return
+	}
+	var area *Area
+	for _, a := range s.areasSnapshot() {
+		if a.Label == scope {
+			found := a
+			area = &found
+			break
+		}
+	}
+	if area == nil {
+		httpError(w, http.StatusNotFound, "unknown scope")
+		return
+	}
+	var raw []byte
+	var containers []containerRef
+	var err error
+	switch {
+	case area.ViaAgent():
+		raw, err = area.Agent.InspectResource(r.Context(), area.AgentScope, kind, name)
+		if err == nil && kind == "image" {
+			if cs, e := area.Agent.Containers(r.Context(), area.AgentScope); e == nil {
+				for _, c := range cs {
+					nm := c.ID
+					if len(c.Names) > 0 {
+						nm = c.Names[0]
+					}
+					containers = append(containers, containerRef{c.Image, nm})
+				}
+			}
+		}
+	case !area.Remote() && area.Scope.IsSystem():
+		ins, ok := s.pod.(resourceInspector)
+		if !ok || s.pod == nil {
+			httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
+			return
+		}
+		raw, err = inspectByKind(ins, r.Context(), kind, name)
+		if err == nil && kind == "image" {
+			if cs, e := ins.Containers(r.Context()); e == nil {
+				for _, c := range cs {
+					containers = append(containers, containerRef{c.Image, c.Name()})
 				}
 			}
 		}
 	default:
-		httpError(w, http.StatusBadRequest, "unknown resource kind")
+		httpError(w, http.StatusBadRequest, "detailed inspect is not available for this scope")
 		return
 	}
+	if err != nil {
+		httpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	fields, usedBy := buildResourceDetail(kind, name, raw, containers)
 	writeJSON(w, http.StatusOK, map[string]any{"fields": fields, "usedBy": usedBy})
 }
 
