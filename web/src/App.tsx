@@ -21,7 +21,7 @@ import {
   Eye,
   FileClock,
   Gauge,
-  Github,
+  Gpu,
   HardDrive,
   Home,
   Import,
@@ -44,6 +44,7 @@ import {
   Search,
   Server,
   Settings,
+  Share2,
   Shield,
   SquarePen,
   Sun,
@@ -361,7 +362,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
             <ThemeSwitch theme={theme} setTheme={setTheme} />
             {!auth.readOnly && currentView && <button className="btn btn-accent" onClick={() => setNewUnitOpen(true)}><Plus size={16} /> Add {currentView.singular}</button>}
             {!auth.readOnly && auth.role === "admin" && location.pathname === "/fleet" && <Link className="btn btn-accent" to="/fleet?new=1"><Plus size={16} /> Add node</Link>}
-            {!auth.readOnly && auth.required && auth.authenticated && <button className="btn btn-ghost" onClick={copyShare}><Github size={16} /> Share</button>}
+            {!auth.readOnly && auth.required && auth.authenticated && <button className="btn btn-ghost" onClick={copyShare}><Share2 size={16} /> Share</button>}
             <button className="btn icon-only mobile-more" onClick={() => setMoreOpen((v) => !v)} aria-label="More"><Menu size={18} /></button>
           </div>
         </header>
@@ -1070,7 +1071,7 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
           <button type="button" className="pop-link" onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/unit/${encodeURIComponent(unit.scope)}/${encodeURIComponent(unit.pod!)}`); }}>{displayName(unit.pod)}</button>
         </RowChip>}
         {unit.stats && <RowChip icon={Cpu} label="usage">cpu {(unit.stats.cpuPct || 0).toFixed(1)}%{unit.stats.memBytes ? ` · mem ${fmtBytes(unit.stats.memBytes)}` : ""}</RowChip>}
-        {!!unit.gpus?.length && <RowChip icon={Zap} tone="gpu" label="gpu">{unit.gpus.join(", ")}</RowChip>}
+        {!!unit.gpus?.length && <RowChip icon={Gpu} tone="gpu" label="gpu">{unit.gpus.join(", ")}</RowChip>}
         {!!unit.restarts && <span className="badge badge-warn">restart {unit.restarts}</span>}
         {unit.health && <span className={`badge ${unit.health === "unhealthy" ? "badge-failed" : unit.health === "healthy" ? "badge-running" : "badge-warn"}`}>{unit.health}</span>}
       </span>
@@ -2230,7 +2231,7 @@ function ResourcesView() {
   return (
     <Page title="Resources" kicker="Host inventory and utilization">
       {error && <p className="banner banner-error">{error}</p>}
-      <Panel title="GPUs" icon={Cpu}>
+      <Panel title="GPUs" icon={Gpu}>
         {devices.length ? devices.map((d) => <GpuRow key={`${d.host || "local"}-${d.name}`} device={d} />) : <p className="muted">No GPU devices detected.</p>}
       </Panel>
     </Page>
