@@ -439,8 +439,6 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
   .import-modes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .import-mode-card { min-height: 88px; grid-template-columns: 1fr; }
   .status-filter { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .status-pill { justify-content: center; gap: 6px; padding: 8px 4px; }
-  .status-pill-label { display: none; }
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .unit-row, .unit-row.is-compact { grid-template-columns: auto minmax(0, 1fr); }
   .badges, .row-actions { grid-column: 1 / -1; justify-content: flex-start; }
@@ -454,6 +452,10 @@ h2 { margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercas
 @media (max-width: 1180px) {
   .dashboard-grid { grid-template-columns: 1fr; }
   .dashboard-grid .gpu-row { grid-template-columns: 1fr; }
+  /* Medium widths: the 6 status pills crowd with labels, so keep only the
+     dot + count and center them. */
+  .status-pill { justify-content: center; gap: 6px; padding: 8px 4px; }
+  .status-pill-label { display: none; }
 }
 
 @media (max-width: 520px) {
