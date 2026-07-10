@@ -999,6 +999,27 @@ function KindIcon({ kind, size = 13 }: { kind: string; size?: number }) {
   }
 }
 
+// The page already names the type, so drop the Quadlet extension from row labels.
+const QUADLET_EXT = /\.(container|pod|network|volume|image|build|kube)$/;
+function displayName(name: string) {
+  return name.replace(QUADLET_EXT, "");
+}
+
+// RowChip is a compact icon button with a hover/focus popover — used for
+// per-row metadata (privilege, pod, usage, gpu) so a dense row stays scannable
+// but details are one hover/tap away. Click is swallowed so it never triggers
+// the row's navigation.
+function RowChip({ icon: Icon, tone, label, children }: { icon: React.ElementType; tone?: string; label: string; children?: React.ReactNode }) {
+  return (
+    <span className="row-chip-wrap">
+      <button type="button" className={`row-chip ${tone || ""}`} aria-label={label} onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+        <Icon size={14} />
+      </button>
+      <span className="row-pop" role="tooltip">{children ?? label}</span>
+    </span>
+  );
+}
+
 function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: () => void; compact?: boolean }) {
   const { auth, toast } = useApiContext();
   const api = useApi();
@@ -1027,24 +1048,22 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
 
   return (
     <Link to={`/unit/${encodeURIComponent(unit.scope)}/${encodeURIComponent(unit.name)}`} className={`unit-row ${cls} ${compact ? "is-compact" : ""}`}>
-      <span className={`dot ${cls}`} />
+      {/* one glyph carries both kind and state: the type icon, colored by state */}
+      <span className={`state-icon ${cls}`} title={`${unit.kind} · ${cls}`} aria-label={`${unit.kind} ${cls}`}><KindIcon kind={unit.kind} size={17} /></span>
       <span className="unit-main">
-        <span className="unit-title">{unit.name}</span>
+        <span className="unit-title">{displayName(unit.name)}</span>
         {!compact && <span className="unit-sub">{unit.description || unit.image || unit.path || ""}</span>}
       </span>
       <span className="badges">
-        {/* status is already shown by the row dot; kind + privilege are icons */}
-        <span className="unit-tag" title={unit.kind} aria-label={unit.kind}><KindIcon kind={unit.kind} /></span>
-        <span className={`unit-tag priv-${scopeKind}`} title={scopeKind} aria-label={scopeKind}>
-          {scopeKind === "rootful" ? <Shield size={13} /> : <UserRound size={13} />}
-        </span>
+        <RowChip icon={scopeKind === "rootful" ? Shield : UserRound} tone={`priv-${scopeKind}`} label={scopeKind} />
         {unit.scope !== "system" && <span className="badge badge-user">{unit.scope}</span>}
+        {unit.pod && <RowChip icon={Boxes} label={`pod ${unit.pod}`}>
+          <button type="button" className="pop-link" onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/unit/${encodeURIComponent(unit.scope)}/${encodeURIComponent(unit.pod!)}`); }}>{displayName(unit.pod)}</button>
+        </RowChip>}
+        {unit.stats && <RowChip icon={Cpu} label="usage">cpu {(unit.stats.cpuPct || 0).toFixed(1)}%{unit.stats.memBytes ? ` · mem ${fmtBytes(unit.stats.memBytes)}` : ""}</RowChip>}
+        {!!unit.gpus?.length && <RowChip icon={Zap} tone="gpu" label="gpu">{unit.gpus.join(", ")}</RowChip>}
         {!!unit.restarts && <span className="badge badge-warn">restart {unit.restarts}</span>}
         {unit.health && <span className={`badge ${unit.health === "unhealthy" ? "badge-failed" : unit.health === "healthy" ? "badge-running" : "badge-warn"}`}>{unit.health}</span>}
-        {unit.stats && <span className="badge">{(unit.stats.cpuPct || 0).toFixed(1)}% cpu</span>}
-        {unit.stats?.memBytes ? <span className="badge">{fmtBytes(unit.stats.memBytes)}</span> : null}
-        {unit.pod && <span className="badge badge-pod" title={`pod ${unit.pod}`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/unit/${encodeURIComponent(unit.scope)}/${encodeURIComponent(unit.pod!)}`); }}><Boxes size={12} /> {unit.pod.replace(/\.pod$/, "")}</span>}
-        {!!unit.gpus?.length && <span className="badge badge-gpu">gpu</span>}
       </span>
       {!auth.readOnly && (
         <span className="row-actions">
