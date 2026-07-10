@@ -100,6 +100,12 @@ func (c *Client) Resources(ctx context.Context, scope string) ([]api.Resource, e
 	return res, err
 }
 
+// DeleteResource removes a network/volume/image from a scope's podman store.
+func (c *Client) DeleteResource(ctx context.Context, scope, kind, name string) error {
+	path := scoped(api.PathResources, scope) + "&kind=" + url.QueryEscape(kind) + "&name=" + url.QueryEscape(name)
+	return c.do(ctx, http.MethodDelete, path, nil)
+}
+
 // Action runs a lifecycle verb against a unit or service in a scope.
 func (c *Client) Action(ctx context.Context, scope, unit, action string) error {
 	if !api.ValidAction(action) {

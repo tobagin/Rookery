@@ -365,6 +365,34 @@ func (c *Client) Images(ctx context.Context) ([]ImageSummary, error) {
 	return out, nil
 }
 
+func (c *Client) delete(ctx context.Context, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, "http://d/v5.0.0/libpod"+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotModified {
+		return fmt.Errorf("podman DELETE %s: %s: %s", path, resp.Status, apiErrorBody(resp.Body))
+	}
+	return nil
+}
+
+// RemoveNetwork / RemoveVolume / RemoveImage delete a podman object. An image
+// name may carry a repo path with slashes, which podman's greedy route accepts.
+func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
+	return c.delete(ctx, "/networks/"+name)
+}
+func (c *Client) RemoveVolume(ctx context.Context, name string) error {
+	return c.delete(ctx, "/volumes/"+name)
+}
+func (c *Client) RemoveImage(ctx context.Context, name string) error {
+	return c.delete(ctx, "/images/"+name)
+}
+
 // PruneImages removes dangling images and returns the bytes reclaimed.
 func (c *Client) PruneImages(ctx context.Context) (int64, error) {
 	u := "http://d/v5.0.0/libpod/images/prune?filters=" + url.QueryEscape(`{"dangling":["true"]}`)

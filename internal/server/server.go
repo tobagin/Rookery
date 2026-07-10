@@ -264,6 +264,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("POST /api/secrets", s.handleCreateSecret)
 	s.mux.HandleFunc("DELETE /api/secrets/{name}", s.handleDeleteSecret)
 	s.mux.HandleFunc("GET /api/resources", s.handleListResources)
+	s.mux.HandleFunc("DELETE /api/resources", s.handleDeleteResource)
 	s.mux.HandleFunc("GET /api/images/stale", s.handleStaleImages)
 	s.mux.HandleFunc("POST /api/images/prune", s.handlePruneImages)
 	s.mux.Handle("GET /", spaFallback(web.Files))

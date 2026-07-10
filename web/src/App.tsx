@@ -1019,7 +1019,7 @@ function UnitsPage({ view }: { view: ResourceView }) {
 // pages reflect what podman actually has, not just the rare .network/.volume
 // units. Networks/volumes have no run state, so there's no status filter.
 function ResourceList({ view }: { view: ResourceView }) {
-  const { resources, scopeErrors, error, loading } = useResources(true);
+  const { resources, scopeErrors, error, loading, reload } = useResources(true);
   const { auth } = useApiContext();
   const [q, setQ] = useState("");
   const ofType = resources.filter((res) => res.kind === view.singular);
@@ -1040,7 +1040,7 @@ function ResourceList({ view }: { view: ResourceView }) {
         <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter ${view.label.toLowerCase()} by name, driver...`} /></label>
       </div>
       {loading ? <p className="muted">Loading {view.label.toLowerCase()}...</p> : filtered.length ? (
-        <div className="unit-list">{filtered.map((res) => <ResourceRow key={`${res.scope}/${res.kind}/${res.name}`} res={res} />)}</div>
+        <div className="unit-list">{filtered.map((res) => <ResourceRow key={`${res.scope}/${res.kind}/${res.name}`} res={res} onChanged={reload} />)}</div>
       ) : ofType.length === 0 ? (
         <EmptyState icon={view.icon} title={`No ${view.label.toLowerCase()} yet`} text={view.blurb} action={addBtn} />
       ) : (
@@ -1050,7 +1050,25 @@ function ResourceList({ view }: { view: ResourceView }) {
   );
 }
 
-function ResourceRow({ res }: { res: Resource }) {
+function ResourceRow({ res, onChanged }: { res: Resource; onChanged?: () => void }) {
+  const { auth, toast } = useApiContext();
+  const api = useApi();
+  const [busy, setBusy] = useState(false);
+  async function del(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Delete ${res.kind} "${res.name}" on ${res.scope}? This removes it from podman.`)) return;
+    setBusy(true);
+    try {
+      await api(`/api/resources?scope=${encodeURIComponent(res.scope)}&kind=${encodeURIComponent(res.kind)}&name=${encodeURIComponent(res.name)}`, { method: "DELETE" });
+      toast(`deleted ${res.name}`);
+      onChanged?.();
+    } catch (err) {
+      toast((err as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <div className="unit-row resource-row">
       <span className="state-icon running" title={res.kind}><KindIcon kind={res.kind} size={17} /></span>
@@ -1062,6 +1080,11 @@ function ResourceRow({ res }: { res: Resource }) {
         <span className={`badge ${res.managed ? "badge-running" : "badge-warn"}`}>{res.managed ? "managed" : "unmanaged"}</span>
         {res.node && <RowChip icon={Server} color={nodeColor(res.node)} label={`node ${res.node}`}>node <b>{res.node}</b> · {res.scope}</RowChip>}
       </span>
+      {!auth.readOnly && !res.managed && (
+        <span className="row-actions">
+          <button className="btn icon-only" disabled={busy} title={`Delete ${res.kind}`} onClick={del}>{busy ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}</button>
+        </span>
+      )}
     </div>
   );
 }
@@ -2153,7 +2176,7 @@ function ImportResult({ unit, scope, sourceContainer = "" }: { unit: { name: str
 function ImagesView({ view }: { view: ResourceView }) {
   const api = useApi();
   const { toast } = useApiContext();
-  const { resources } = useResources(true);
+  const { resources, reload: reloadResources } = useResources(true);
   const storeImages = resources.filter((r) => r.kind === "image").sort((a, b) => a.name.localeCompare(b.name));
   const [params, setParams] = useSearchParams();
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
@@ -2251,7 +2274,7 @@ function ImagesView({ view }: { view: ResourceView }) {
     <Page title={view.label} subtitle="Image units, updates, and cleanup">
       {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
       <Panel title={`Images in store (${storeImages.length})`} icon={Layers}>
-        {storeImages.length ? storeImages.map((im, i) => <ResourceRow key={`${im.node || ""}/${im.scope}/${im.name}/${i}`} res={im} />) : <p className="muted">No tagged images in the store yet.</p>}
+        {storeImages.length ? storeImages.map((im, i) => <ResourceRow key={`${im.node || ""}/${im.scope}/${im.name}/${i}`} res={im} onChanged={reloadResources} />) : <p className="muted">No tagged images in the store yet.</p>}
       </Panel>
       <p className="banner">Image prune and container import are local-host operations; remote hosts still support update checks and pulls where configured.</p>
       <div className="tiles">

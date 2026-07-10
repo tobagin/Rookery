@@ -116,6 +116,66 @@ func (s *Server) appendLocalResources(r *http.Request, area Area, out []resource
 	return out
 }
 
+// resourceMutator is the delete slice of the Podman client, asserted at runtime.
+type resourceMutator interface {
+	RemoveNetwork(ctx context.Context, name string) error
+	RemoveVolume(ctx context.Context, name string) error
+	RemoveImage(ctx context.Context, name string) error
+}
+
+func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
+	scope := r.URL.Query().Get("scope")
+	kind := r.URL.Query().Get("kind")
+	name := r.URL.Query().Get("name")
+	if scope == "" || kind == "" || name == "" {
+		httpError(w, http.StatusBadRequest, "scope, kind, and name are required")
+		return
+	}
+	var area *Area
+	for _, a := range s.areasSnapshot() {
+		if a.Label == scope {
+			found := a
+			area = &found
+			break
+		}
+	}
+	if area == nil {
+		httpError(w, http.StatusNotFound, "unknown scope")
+		return
+	}
+	var err error
+	switch {
+	case area.ViaAgent():
+		err = area.Agent.DeleteResource(r.Context(), area.AgentScope, kind, name)
+	case !area.Remote() && area.Scope.IsSystem():
+		rm, ok := s.pod.(resourceMutator)
+		if !ok || s.pod == nil {
+			httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
+			return
+		}
+		switch kind {
+		case "network":
+			err = rm.RemoveNetwork(r.Context(), name)
+		case "volume":
+			err = rm.RemoveVolume(r.Context(), name)
+		case "image":
+			err = rm.RemoveImage(r.Context(), name)
+		default:
+			httpError(w, http.StatusBadRequest, "unknown resource kind")
+			return
+		}
+	default:
+		httpError(w, http.StatusBadRequest, "this scope does not support resource deletion")
+		return
+	}
+	if err != nil {
+		httpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.audit(r, "resource.delete", scope, map[string]any{"kind": kind, "name": name})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) appendAgentResources(r *http.Request, area Area, out []resourceJSON, scopeErrors map[string]string) []resourceJSON {
 	res, err := area.Agent.Resources(r.Context(), area.AgentScope)
 	if err != nil {
