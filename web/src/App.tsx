@@ -293,12 +293,15 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   // glance (and a "0" invites the first create). ponytail: reuses the units
   // poll; lift to a shared context only if the double-fetch shows up as load.
   const { units: navUnits } = useUnits(true);
+  const [nodeCount, setNodeCount] = useState<number>();
+  useEffect(() => { api<{ nodes?: unknown[] }>("/api/nodes").then(({ body }) => setNodeCount(body.nodes?.length)).catch(() => undefined); }, [api]);
   const navCounts = useMemo(() => {
     const c: Record<string, number> = {};
     RESOURCE_VIEWS.forEach((v) => { c[v.path] = 0; });
     navUnits.forEach((u) => { const v = viewForKind(u.kind); c[v] = (c[v] || 0) + 1; });
+    if (nodeCount !== undefined) c["/fleet"] = nodeCount;
     return c;
-  }, [navUnits]);
+  }, [navUnits, nodeCount]);
 
   useEffect(() => {
     localStorage.setItem("rookery-sidebar", sidebarCollapsed ? "collapsed" : "expanded");
@@ -1573,7 +1576,7 @@ function FleetView() {
         </div>
       </Panel>}
       <Panel title="Nodes" icon={Network}>
-        <div className="filterbar"><label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search nodes..." /></label></div>
+        <div className="filterbar node-filterbar"><label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search nodes..." /></label></div>
         {loading ? <p className="muted">Loading nodes...</p> : filteredNodes.length ? filteredNodes.map((node) => <NodeRow key={node.id} node={node} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <p className="muted">No matching nodes.</p>}
       </Panel>
       <Panel title="Groups" icon={ListFilter}>
@@ -1620,23 +1623,20 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
     }
   }
   return (
-    <div className="history-row">
-      <div>
-        <strong>{node.local ? "local" : node.id}</strong>
-        <div className="muted">{scopeText || "no scopes"}</div>
+    <div className="history-row node-row">
+      <div className="node-id-block">
+        <div><strong>{node.local ? "local" : node.id}</strong>{node.metrics?.hostname && node.metrics.hostname !== node.id && <span className="muted"> · {node.metrics.hostname}</span>}</div>
+        <div className="muted node-meta">{[node.metrics?.kernel, node.metrics?.cores != null ? `${node.metrics.cores} cores` : null, node.metrics?.memTotalKb ? `${fmtBytes(node.metrics.memTotalKb * 1024)} RAM` : null].filter(Boolean).join(" · ") || scopeText || "no scopes"}</div>
         {!!node.labels?.length && <div>{node.labels.map((label) => <span className="badge badge-user" key={label}>{label}</span>)}</div>}
         {node.errors?.length ? <div className="warn-text">{node.errors.join("; ")}</div> : null}
       </div>
       <span className="grow" />
-      <span className="badge">rootful {rootful.units}/{rootful.running}</span>
-      <span className="badge badge-user">rootless {rootless.units}/{rootless.running}</span>
-      {node.metrics?.load1 != null && <span className="badge">load {node.metrics.load1.toFixed(2)}</span>}
       {node.metrics?.cpuPct != null && node.metrics.cpuPct >= 0 && <span className="badge">{node.metrics.cpuPct}% cpu</span>}
       {memPct != null && <span className="badge">{memPct}% mem</span>}
-      <span className="badge">{node.units} units</span>
-      <span className="badge badge-running">{node.running} running</span>
+      {node.metrics?.load1 != null && <span className="badge">load {node.metrics.load1.toFixed(2)}</span>}
+      {rootful.units > 0 && <span className={`badge ${rootful.failed ? "badge-failed" : "badge-running"}`} title="rootful: running / total"><Shield size={12} /> {rootful.running}/{rootful.units}</span>}
+      {rootless.units > 0 && <span className={`badge ${rootless.failed ? "badge-failed" : "badge-running"}`} title="rootless: running / total"><UserRound size={12} /> {rootless.running}/{rootless.units}</span>}
       {node.failed > 0 && <span className="badge badge-failed">{node.failed} failed</span>}
-      {node.unknown > 0 && <span className="badge">{node.unknown} unknown</span>}
       {editable && <button className="btn btn-sm" onClick={() => { setLabelDraft(node.labels?.join(", ") || ""); setLabelsOpen(true); }}><SquarePen size={14} /> labels</button>}
       {editable && !node.local && <button className="btn btn-sm btn-danger" onClick={removeNode}><Trash2 size={14} /> remove</button>}
       {labelsOpen && <Overlay title={`Labels for ${node.local ? "local" : node.id}`} onClose={() => setLabelsOpen(false)}>

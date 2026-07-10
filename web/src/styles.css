@@ -172,6 +172,9 @@ h1, .kicker, h2, .tile-value, .tile-label, .unit-title, .nav-group-label, .chip,
 .badge-pod { cursor: pointer; }
 .badge-pod:hover { color: var(--text); border-color: var(--border-strong); }
 .empty-action { margin-top: 14px; }
+.node-filterbar { margin-bottom: 14px; }
+.node-id-block { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.node-meta { font-size: 12px; }
 .badge-gpu { color: #61d475; border-color: rgba(46,160,67,.45); }
 .badge-running { color: var(--ok); border-color: rgba(46,160,67,.45); }
 .badge-failed { color: var(--bad); border-color: rgba(240,82,82,.55); }
