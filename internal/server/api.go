@@ -28,6 +28,7 @@ type unitJSON struct {
 	Kind        string     `json:"kind"`
 	Scope       string     `json:"scope"`
 	ScopeKind   string     `json:"scopeKind"`
+	Node        string     `json:"node,omitempty"`
 	ScopeUser   string     `json:"scopeUser,omitempty"`
 	Service     string     `json:"service"`
 	Path        string     `json:"path"`
@@ -98,6 +99,7 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 				Scope:     area.Label,
 				ScopeKind: scopeKind,
 				ScopeUser: area.Scope.User,
+				Node:      areaNodeID(area),
 				Service:   services[i],
 				Path:      d.unit.Path,
 				ReadOnly:  filepath.Dir(d.unit.Path) != area.Dirs[0],

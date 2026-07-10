@@ -60,13 +60,7 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 	index := map[string]int{}
 	var nodes []NodeInventory
 	for _, area := range s.areasSnapshot() {
-		id := "local"
-		if area.Remote() {
-			id = area.Scope.SSH
-		}
-		if area.NodeID != "" {
-			id = area.NodeID
-		}
+		id := areaNodeID(area)
 		i, ok := index[id]
 		if !ok {
 			nodes = append(nodes, NodeInventory{ID: id, Address: area.Scope.SSH, Local: !area.Remote()})

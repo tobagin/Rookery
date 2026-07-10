@@ -22,6 +22,19 @@ import (
 // agentUnitJSON maps one agent-reported unit into the API's unit shape. Agent
 // units are editable — the agent serves file read/write — so they are not
 // marked read-only; history stays disabled since the agent keeps no git.
+// areaNodeID is the node identity an area belongs to, matching the Fleet node
+// list: an explicit NodeID wins, else a remote area is keyed by its ssh target,
+// else it is the local host.
+func areaNodeID(area Area) string {
+	if area.NodeID != "" {
+		return area.NodeID
+	}
+	if area.Remote() {
+		return area.Scope.SSH
+	}
+	return "local"
+}
+
 func agentUnitJSON(area Area, u papi.Unit) unitJSON {
 	scopeKind := "rootless"
 	if area.Scope.IsSystem() {
@@ -35,6 +48,7 @@ func agentUnitJSON(area Area, u papi.Unit) unitJSON {
 		ScopeUser: area.Scope.User,
 		Service:   u.Service,
 		Path:      u.Path,
+		Node:      areaNodeID(area),
 		Load:      "unknown",
 	}
 	uj.fillStatus(systemd.UnitStatus{

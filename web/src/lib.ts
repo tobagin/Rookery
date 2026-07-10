@@ -17,6 +17,7 @@ export interface Unit {
   scope: string;
   scopeKind?: "rootful" | "rootless";
   scopeUser?: string;
+  node?: string;
   name: string;
   kind: string;
   description?: string;

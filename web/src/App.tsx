@@ -946,18 +946,16 @@ function UnitsPage({ view }: { view: ResourceView }) {
       <ScopeErrors errors={scopeErrors} />
       {error && <p className="banner banner-error">{error}</p>}
       {view.runnable && (
-        <div className="status-filter" aria-label="Filter by status">
-          {(["all", "running", "failed", "pending", "stopped", "unknown"] as Array<UnitState | "all">).map((s) => (
-            <button key={s} className={`status-pill ${status === s ? "active" : ""}`} onClick={() => setStatus(s)}>
-              <span className={s === "all" ? "dot all" : `dot ${s}`} />
-              <span className="status-pill-label">{s}</span>
-              <strong>{statusCounts[s]}</strong>
-            </button>
-          ))}
+        <div className="tiles">
+          <MetricTile label={view.label.toLowerCase()} value={statusCounts.all} tone="dim" />
+          <MetricTile label="running" value={statusCounts.running} tone={statusCounts.running ? "ok" : "dim"} />
+          <MetricTile label="failed" value={statusCounts.failed} tone={statusCounts.failed ? "bad" : "dim"} />
+          <MetricTile label="stopped" value={statusCounts.stopped} tone={statusCounts.stopped ? "warn" : "dim"} />
         </div>
       )}
       <div className="filterbar units-filterbar">
         <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter ${view.label.toLowerCase()} by name, image, pod...`} /></label>
+        {view.runnable && <select className="input" value={status} onChange={(e) => setStatus(e.target.value as UnitState | "all")}>{(["all", "running", "failed", "pending", "stopped", "unknown"] as Array<UnitState | "all">).map((s) => <option key={s} value={s}>{s === "all" ? "all statuses" : s}</option>)}</select>}
         <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
         <select className="input" value={sort} onChange={(e) => setSort(e.target.value)}><option value="name">sort name</option><option value="state">sort state</option><option value="scope">sort scope</option></select>
         <label className="check density-toggle"><input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} /> compact rows</label>
@@ -1007,15 +1005,23 @@ function displayName(name: string) {
   return name.replace(QUADLET_EXT, "");
 }
 
+// A stable color per node id (hashed to a hue) so the same node reads the same
+// color everywhere — the Fleet swatch and each unit row's node chip.
+function nodeColor(id: string) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360} 62% 58%)`;
+}
+
 // RowChip is a compact icon button with a hover/focus popover — used for
 // per-row metadata (privilege, pod, usage, gpu) so a dense row stays scannable
 // but details are one hover/tap away. Click is swallowed so it never triggers
 // the row's navigation.
-function RowChip({ icon: Icon, tone, label, children }: { icon: React.ElementType; tone?: string; label: string; children?: React.ReactNode }) {
+function RowChip({ icon: Icon, tone, color, label, children }: { icon: React.ElementType; tone?: string; color?: string; label: string; children?: React.ReactNode }) {
   return (
     <span className="row-chip-wrap">
-      <button type="button" className={`row-chip ${tone || ""}`} aria-label={label} onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
-        <Icon size={14} />
+      <button type="button" className={`row-chip ${tone || ""}`} style={color ? { color } : undefined} aria-label={label} onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+        <Icon size={16} />
       </button>
       <span className="row-pop" role="tooltip">{children ?? label}</span>
     </span>
@@ -1057,6 +1063,7 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
         {!compact && <span className="unit-sub">{unit.description || unit.image || unit.path || ""}</span>}
       </span>
       <span className="badges">
+        {unit.node && <RowChip icon={Server} color={nodeColor(unit.node)} label={`node ${unit.node}`} />}
         <RowChip icon={scopeKind === "rootful" ? Shield : UserRound} tone={`priv-${scopeKind}`} label={scopeKind} />
         {unit.scope !== "system" && <span className="badge badge-user">{unit.scope}</span>}
         {unit.pod && <RowChip icon={Boxes} label={`pod ${unit.pod}`}>
@@ -1652,7 +1659,7 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
     <div className="history-row node-row">
       <div className="node-click" onClick={() => setDetailOpen(true)}>
         <div className="node-id-block">
-          <div><strong>{node.local ? "local" : node.id}</strong>{node.metrics?.hostname && node.metrics.hostname !== node.id && <span className="muted"> · {node.metrics.hostname}</span>}</div>
+          <div><span className="node-swatch" style={{ background: nodeColor(node.id) }} /><strong>{node.local ? "local" : node.id}</strong>{node.metrics?.hostname && node.metrics.hostname !== node.id && <span className="muted"> · {node.metrics.hostname}</span>}</div>
           <div className="muted node-meta">{[node.metrics?.kernel, node.metrics?.cores != null ? `${node.metrics.cores} cores` : null, node.metrics?.memTotalKb ? `${fmtBytes(node.metrics.memTotalKb * 1024)} RAM` : null].filter(Boolean).join(" · ") || scopeText || "no scopes"}</div>
           {!!node.labels?.length && <div>{node.labels.map((label) => <span className="badge badge-user" key={label}>{label}</span>)}</div>}
           {node.errors?.length ? <div className="warn-text">{node.errors.join("; ")}</div> : null}
