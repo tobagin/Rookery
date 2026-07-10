@@ -302,9 +302,10 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   const navCounts = useMemo(() => {
     const c: Record<string, number> = {};
     RESOURCE_VIEWS.forEach((v) => { c[v.path] = 0; });
-    // runnable types + images come from Quadlet units; networks/volumes come
-    // from live podman resources (which is why they were showing 0 as units).
-    navUnits.forEach((u) => { const v = viewForKind(u.kind); if (v === "/containers" || v === "/pods" || v === "/images") c[v] = (c[v] || 0) + 1; });
+    // runnable types (containers/pods) come from Quadlet units; networks,
+    // volumes and images come from live podman resources (which is why they
+    // were showing 0 when counted as units).
+    navUnits.forEach((u) => { const v = viewForKind(u.kind); if (v === "/containers" || v === "/pods") c[v] = (c[v] || 0) + 1; });
     navResources.forEach((r) => { const v = viewForKind(r.kind); c[v] = (c[v] || 0) + 1; });
     if (nodeCount !== undefined) c["/fleet"] = nodeCount;
     return c;
@@ -2152,8 +2153,8 @@ function ImportResult({ unit, scope, sourceContainer = "" }: { unit: { name: str
 function ImagesView({ view }: { view: ResourceView }) {
   const api = useApi();
   const { toast } = useApiContext();
-  const { units, reload: reloadUnits } = useUnits(true);
-  const imageUnits = units.filter((u) => viewForKind(u.kind) === "/images");
+  const { resources } = useResources(true);
+  const storeImages = resources.filter((r) => r.kind === "image").sort((a, b) => a.name.localeCompare(b.name));
   const [params, setParams] = useSearchParams();
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const [summary, setSummary] = useState("");
@@ -2249,8 +2250,8 @@ function ImagesView({ view }: { view: ResourceView }) {
   return (
     <Page title={view.label} subtitle="Image units, updates, and cleanup">
       {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
-      <Panel title="Image units" icon={Layers}>
-        {imageUnits.length ? imageUnits.map((u) => <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={reloadUnits} compact />) : <p className="muted">No .image or .build units yet — add one to pre-pull or build an image.</p>}
+      <Panel title={`Images in store (${storeImages.length})`} icon={Layers}>
+        {storeImages.length ? storeImages.map((im, i) => <ResourceRow key={`${im.node || ""}/${im.scope}/${im.name}/${i}`} res={im} />) : <p className="muted">No tagged images in the store yet.</p>}
       </Panel>
       <p className="banner">Image prune and container import are local-host operations; remote hosts still support update checks and pulls where configured.</p>
       <div className="tiles">

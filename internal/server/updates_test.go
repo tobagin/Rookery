@@ -20,6 +20,7 @@ type fakePodman struct {
 	pullErr  error
 	networks []podman.NetworkSummary
 	volumes  []podman.VolumeSummary
+	images   []podman.ImageSummary
 }
 
 func (f *fakePodman) Networks(context.Context) ([]podman.NetworkSummary, error) {
@@ -27,6 +28,9 @@ func (f *fakePodman) Networks(context.Context) ([]podman.NetworkSummary, error) 
 }
 func (f *fakePodman) Volumes(context.Context) ([]podman.VolumeSummary, error) {
 	return f.volumes, nil
+}
+func (f *fakePodman) Images(context.Context) ([]podman.ImageSummary, error) {
+	return f.images, nil
 }
 
 func (f *fakePodman) Info(context.Context) (*podman.Info, error) {

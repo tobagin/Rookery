@@ -344,6 +344,27 @@ func (c *Client) Volumes(ctx context.Context) ([]VolumeSummary, error) {
 	return out, nil
 }
 
+// ImageSummary is one row of `podman images`, with its tags and size.
+type ImageSummary struct {
+	ID       string   `json:"Id"`
+	RepoTags []string `json:"RepoTags"`
+	Size     int64    `json:"Size"`
+}
+
+// Images lists the images in this socket's store.
+func (c *Client) Images(ctx context.Context) ([]ImageSummary, error) {
+	resp, err := c.get(ctx, "/images/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out []ImageSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PruneImages removes dangling images and returns the bytes reclaimed.
 func (c *Client) PruneImages(ctx context.Context) (int64, error) {
 	u := "http://d/v5.0.0/libpod/images/prune?filters=" + url.QueryEscape(`{"dangling":["true"]}`)

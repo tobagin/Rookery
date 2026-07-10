@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -14,6 +15,32 @@ import (
 type resourcesAPI interface {
 	Networks(ctx context.Context) ([]podman.NetworkSummary, error)
 	Volumes(ctx context.Context) ([]podman.VolumeSummary, error)
+	Images(ctx context.Context) ([]podman.ImageSummary, error)
+}
+
+// humanBytes renders a byte count like "1.4 GB" for the resource Detail field.
+func humanBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// imageResourceName picks a display name for an image: its first real tag, or
+// "" for a dangling/intermediate image (which the list skips).
+func imageResourceName(repoTags []string) string {
+	for _, t := range repoTags {
+		if t != "" && t != "<none>:<none>" {
+			return t
+		}
+	}
+	return ""
 }
 
 // resourceJSON is one live podman object (network or volume) as the API reports
@@ -73,6 +100,17 @@ func (s *Server) appendLocalResources(r *http.Request, area Area, out []resource
 	} else {
 		for _, v := range vols {
 			out = append(out, resourceJSON{Kind: "volume", Name: v.Name, Scope: area.Label, Node: node, Driver: v.Driver, Detail: v.Mountpoint, Managed: managed["volume:"+v.Name]})
+		}
+	}
+	if imgs, err := rp.Images(r.Context()); err != nil {
+		scopeErrors[area.Label] = err.Error()
+	} else {
+		for _, im := range imgs {
+			name := imageResourceName(im.RepoTags)
+			if name == "" {
+				continue // skip dangling/intermediate images
+			}
+			out = append(out, resourceJSON{Kind: "image", Name: name, Scope: area.Label, Node: node, Detail: humanBytes(im.Size)})
 		}
 	}
 	return out

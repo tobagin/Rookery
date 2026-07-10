@@ -24,6 +24,10 @@ func TestListResources(t *testing.T) {
 		volumes: []podman.VolumeSummary{
 			{Name: "data", Driver: "local", Mountpoint: "/mnt/data"}, // unmanaged
 		},
+		images: []podman.ImageSummary{
+			{ID: "sha256:aaa", RepoTags: []string{"docker.io/library/redis:7"}, Size: 3 << 20},
+			{ID: "sha256:bbb", RepoTags: []string{"<none>:<none>"}, Size: 1 << 20}, // dangling, skipped
+		},
 	}
 	srv := New(Options{
 		Areas:    []Area{{Label: "system", Scope: systemd.Scope{}, Dirs: []string{dir}}},
@@ -40,8 +44,9 @@ func TestListResources(t *testing.T) {
 		r := raw.(map[string]any)
 		managed[r["kind"].(string)+":"+r["name"].(string)] = r["managed"].(bool)
 	}
-	if len(managed) != 3 {
-		t.Fatalf("got %d resources, want 3: %v", len(managed), managed)
+	// 2 networks + 1 volume + 1 tagged image (dangling image skipped).
+	if len(managed) != 4 {
+		t.Fatalf("got %d resources, want 4: %v", len(managed), managed)
 	}
 	if !managed["network:systemd-foo"] {
 		t.Errorf("systemd-foo should be managed (foo.network exists)")
@@ -51,5 +56,8 @@ func TestListResources(t *testing.T) {
 	}
 	if managed["volume:data"] {
 		t.Errorf("data volume should be unmanaged")
+	}
+	if _, ok := managed["image:docker.io/library/redis:7"]; !ok {
+		t.Errorf("tagged image should be listed: %v", managed)
 	}
 }
