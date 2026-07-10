@@ -237,6 +237,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("DELETE /api/nodes/{id}", s.handleDeleteNode)
 	s.mux.HandleFunc("GET /api/groups", s.handleNodeGroups)
 	s.mux.HandleFunc("PATCH /api/nodes/{id}/labels", s.handleNodeLabels)
+	s.mux.HandleFunc("PATCH /api/nodes/{id}/appearance", s.handleNodeAppearance)
 	s.mux.HandleFunc("GET /api/policies", s.handlePolicies)
 	s.mux.HandleFunc("POST /api/policies/waivers", s.handleWaivePolicy)
 	s.mux.HandleFunc("DELETE /api/policies/waivers/{key}", s.handleDeletePolicyWaiver)

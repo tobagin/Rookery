@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentSchema = 6
+const CurrentSchema = 7
 
 // Open opens rookery.db and applies all schema migrations.
 func Open(path string) (*sql.DB, error) {
@@ -156,6 +156,15 @@ func applyMigration(db *sql.DB, version int) error {
 	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`); err != nil {
 			return err
+		}
+	case 7:
+		for _, stmt := range []string{
+			`ALTER TABLE node_metadata ADD COLUMN color TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE node_metadata ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`,
+		} {
+			if _, err := tx.Exec(stmt); err != nil {
+				return err
+			}
 		}
 	default:
 		return fmt.Errorf("unknown schema version %d", version)

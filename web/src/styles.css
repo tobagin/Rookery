@@ -214,6 +214,8 @@ h1, .kicker, h2, .tile-value, .tile-label, .unit-title, .nav-group-label, .chip,
 .resource-usedby { margin-top: 14px; }
 .resource-usedby h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
 .resource-usedby > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.node-color-pick { display: flex; align-items: center; gap: 8px; }
+.node-color-pick input[type=color] { width: 44px; height: 34px; padding: 2px; border: 1px solid var(--border); border-radius: 7px; background: transparent; cursor: pointer; }
 
 /* Create flow: guided wizard with a live Quadlet preview. */
 .create-flow { display: flex; flex-direction: column; gap: 14px; }

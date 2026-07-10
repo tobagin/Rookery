@@ -299,7 +299,8 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   const { resources: navResources } = useResources(true);
   const [nodeCount, setNodeCount] = useState<number>();
   const [license, setLicense] = useState<LicenseStatus | null>(null);
-  useEffect(() => { api<{ nodes?: unknown[]; license?: LicenseStatus }>("/api/nodes").then(({ body }) => { setNodeCount(body.nodes?.length); setLicense(body.license || null); }).catch(() => undefined); }, [api]);
+  const [nodeColors, setNodeColors] = useState<Record<string, string>>({});
+  useEffect(() => { api<{ nodes?: ManagedNode[]; license?: LicenseStatus }>("/api/nodes").then(({ body }) => { setNodeCount(body.nodes?.length); setLicense(body.license || null); setNodeColors(Object.fromEntries((body.nodes || []).filter((n) => n.color).map((n) => [n.id, n.color!]))); }).catch(() => undefined); }, [api]);
   const atNodeLimit = !!license && !license.enterpriseAvailable && license.nodesRemaining <= 0;
   const navCounts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -338,6 +339,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   }
 
   return (
+    <NodeColorContext.Provider value={nodeColors}>
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-brand-row">
@@ -393,6 +395,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
         </Overlay>
       )}
     </div>
+    </NodeColorContext.Provider>
   );
 }
 
@@ -1057,6 +1060,7 @@ function ResourceList({ view }: { view: ResourceView }) {
 function ResourceRow({ res, onChanged, updateAvailable }: { res: Resource; onChanged?: () => void; updateAvailable?: boolean }) {
   const { auth, toast } = useApiContext();
   const api = useApi();
+  const nodeCol = useNodeColor();
   const [busy, setBusy] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   async function del(e: React.MouseEvent) {
@@ -1086,7 +1090,7 @@ function ResourceRow({ res, onChanged, updateAvailable }: { res: Resource; onCha
           {updateAvailable && <RowChip icon={Download} color="var(--warn)" label="update available">update available — pull to refresh</RowChip>}
           {/* only the exception (Quadlet-backed) is flagged; imperatively-created is the norm */}
           {res.managed && <span className="badge badge-running" title="defined by a Quadlet unit">managed</span>}
-          {res.node && <RowChip icon={Server} color={nodeColor(res.node)} label={`node ${res.node}`}>node <b>{res.node}</b> · {res.scope}</RowChip>}
+          {res.node && <RowChip icon={Server} color={nodeCol(res.node)} label={`node ${res.node}`}>node <b>{res.node}</b> · {res.scope}</RowChip>}
         </span>
       </div>
       {!auth.readOnly && !res.managed && (
@@ -1153,10 +1157,28 @@ function displayName(name: string) {
 
 // A stable color per node id (hashed to a hue) so the same node reads the same
 // color everywhere — the Fleet swatch and each unit row's node chip.
+function hslToHex(h: number, s: number, l: number) {
+  s /= 100; l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1))); };
+  const hex = (x: number) => Math.round(255 * x).toString(16).padStart(2, "0");
+  return `#${hex(f(0))}${hex(f(8))}${hex(f(4))}`;
+}
+// Hex (for <input type=color> compatibility) so a custom override and the auto
+// color share the same format.
 function nodeColor(id: string) {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 62% 58%)`;
+  return hslToHex(h % 360, 62, 58);
+}
+
+// Custom per-node colors (from the Fleet edit dialog) override the auto hash.
+// Shell provides the map so every unit/resource row's node chip matches the
+// Fleet swatch. Falls back to the hash for nodes without an override.
+const NodeColorContext = React.createContext<Record<string, string>>({});
+function useNodeColor() {
+  const overrides = React.useContext(NodeColorContext);
+  return useCallback((id: string) => overrides[id] || nodeColor(id), [overrides]);
 }
 
 // RowChip is a compact icon button with a hover/focus popover — used for
@@ -1178,6 +1200,7 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
   const { auth, toast } = useApiContext();
   const api = useApi();
   const navigate = useNavigate();
+  const nodeCol = useNodeColor();
   const [acting, setActing] = useState("");
   const cls = stateClass(unit);
   const canStart = cls === "stopped" || cls === "failed";
@@ -1219,7 +1242,7 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
           <button type="button" className="pop-link" onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/unit/${encodeURIComponent(unit.scope)}/${encodeURIComponent(unit.pod!)}`); }}>{displayName(unit.pod)}</button>
         </RowChip>}
         <RowChip icon={scopeKind === "rootful" ? Shield : UserRound} tone={`priv-${scopeKind}`} label={scopeKind} />
-        {unit.node && <RowChip icon={Server} color={nodeColor(unit.node)} label={`node ${unit.node}`}>node <b>{unit.node}</b> · {unit.scope}{unit.scopeUser ? ` (${unit.scopeUser})` : ""}</RowChip>}
+        {unit.node && <RowChip icon={Server} color={nodeCol(unit.node)} label={`node ${unit.node}`}>node <b>{unit.node}</b> · {unit.scope}{unit.scopeUser ? ` (${unit.scopeUser})` : ""}</RowChip>}
       </span>
       {!auth.readOnly && (
         <span className="row-actions">
@@ -1778,6 +1801,8 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState(node.labels?.join(", ") || "");
+  const [nameDraft, setNameDraft] = useState(node.displayName || "");
+  const [colorDraft, setColorDraft] = useState(node.color || nodeColor(node.id));
   const scopeText = node.scopes.map((s) => s.system ? `${s.label} (rootful)` : `${s.label} (${s.user || "user"} rootless)`).join(", ");
   const rootful = node.rootful || { units: 0, running: 0, failed: 0, unknown: 0 };
   const rootless = node.rootless || { units: 0, running: 0, failed: 0, unknown: 0 };
@@ -1785,7 +1810,8 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
   async function saveLabels() {
     try {
       await api(`/api/nodes/${encodeURIComponent(node.id)}/labels`, { method: "PATCH", body: JSON.stringify({ labels: labelDraft.split(",") }) });
-      toast("node labels updated");
+      await api(`/api/nodes/${encodeURIComponent(node.id)}/appearance`, { method: "PATCH", body: JSON.stringify({ color: colorDraft === nodeColor(node.id) ? "" : colorDraft, displayName: nameDraft.trim() }) });
+      toast("node updated");
       setLabelsOpen(false);
       onChanged();
     } catch (e) {
@@ -1806,7 +1832,7 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
     <div className="history-row node-row">
       <div className="node-click" onClick={() => setDetailOpen(true)}>
         <div className="node-id-block">
-          <div><span className="node-swatch" style={{ background: nodeColor(node.id) }} /><strong>{node.local ? "local" : node.id}</strong>{node.metrics?.hostname && node.metrics.hostname !== node.id && <span className="muted"> · {node.metrics.hostname}</span>}</div>
+          <div><span className="node-swatch" style={{ background: node.color || nodeColor(node.id) }} /><strong>{node.displayName || (node.local ? "local" : node.id)}</strong>{node.metrics?.hostname && node.metrics.hostname !== node.id && <span className="muted"> · {node.metrics.hostname}</span>}</div>
           <div className="muted node-meta">{[node.metrics?.kernel, node.metrics?.cores != null ? `${node.metrics.cores} cores` : null, node.metrics?.memTotalKb ? `${fmtBytes(node.metrics.memTotalKb * 1024)} RAM` : null].filter(Boolean).join(" · ") || scopeText || "no scopes"}</div>
           {!!node.labels?.length && <div>{node.labels.map((label) => <span className="badge badge-user" key={label}>{label}</span>)}</div>}
           {node.errors?.length ? <div className="warn-text">{node.errors.join("; ")}</div> : null}
@@ -1818,12 +1844,14 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
           {rootless.units > 0 && <RowChip icon={UserRound} tone="priv-rootless" color={rootless.failed ? "var(--bad)" : undefined} label="rootless">rootless {rootless.running}/{rootless.units} running{rootless.failed ? `, ${rootless.failed} failed` : ""}</RowChip>}
         </span>
       </div>
-      {editable && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setLabelDraft(node.labels?.join(", ") || ""); setLabelsOpen(true); }}><SquarePen size={14} /> labels</button>}
+      {editable && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setLabelDraft(node.labels?.join(", ") || ""); setNameDraft(node.displayName || ""); setColorDraft(node.color || nodeColor(node.id)); setLabelsOpen(true); }}><SquarePen size={14} /> edit</button>}
       {editable && !node.local && <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); removeNode(); }}><Trash2 size={14} /> remove</button>}
-      {labelsOpen && <Overlay title={`Labels for ${node.local ? "local" : node.id}`} onClose={() => setLabelsOpen(false)}>
+      {labelsOpen && <Overlay title={`Edit ${node.local ? "local" : node.id}`} onClose={() => setLabelsOpen(false)}>
         <div className="stack-form">
-          <input className="input" value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)} placeholder="prod, gpu" />
-          <button className="btn btn-accent" onClick={saveLabels}><Save size={16} /> Save labels</button>
+          <label className="wizard-field"><span>Display name</span><input className="input" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} placeholder={node.local ? "local" : node.id} /></label>
+          <label className="wizard-field"><span>Color</span><span className="node-color-pick"><input type="color" value={colorDraft} onChange={(e) => setColorDraft(e.target.value)} /><button type="button" className="btn btn-sm" onClick={() => setColorDraft(nodeColor(node.id))}>reset to auto</button></span></label>
+          <label className="wizard-field"><span>Labels <span className="muted">(comma-separated)</span></span><input className="input" value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)} placeholder="prod, gpu" /></label>
+          <button className="btn btn-accent" onClick={saveLabels}><Save size={16} /> Save</button>
         </div>
       </Overlay>}
       {detailOpen && <NodeDetail node={node} onClose={() => setDetailOpen(false)} />}
@@ -2484,21 +2512,46 @@ function UpdateRow({ row, after, busy }: { row: UpdateInfo; after: () => Promise
   );
 }
 
-// ResourcesView: per-host hardware inventory. ponytail: 1a ships GPUs (which
-// already carry a `host` tag); per-node CPU/mem/disk gauges + the node dropdown
-// land in 1b once the fleet metrics endpoint is wired.
+// ResourcesView: per-node hardware inventory — pick a node and see its CPU/mem/
+// load/cores, host identity, and GPUs.
 function ResourcesView() {
   const api = useApi();
+  const [nodes, setNodes] = useState<ManagedNode[]>([]);
   const [devices, setDevices] = useState<GPUDevice[]>([]);
+  const [sel, setSel] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ devices?: GPUDevice[] }>("/api/gpus").then(({ body }) => setDevices(body.devices || [])).catch((e) => setError((e as Error).message));
+    api<{ nodes?: ManagedNode[] }>("/api/nodes").then(({ body }) => {
+      const ns = body.nodes || [];
+      setNodes(ns);
+      setSel((prev) => prev || (ns.find((n) => n.local)?.id || ns[0]?.id || ""));
+    }).catch((e) => setError((e as Error).message));
+    api<{ devices?: GPUDevice[] }>("/api/gpus").then(({ body }) => setDevices(body.devices || [])).catch(() => undefined);
   }, [api]);
+  const node = nodes.find((n) => n.id === sel);
+  const m = node?.metrics;
+  const memPct = m?.memTotalKb ? Math.round(100 * (1 - (m.memAvailKb || 0) / m.memTotalKb)) : null;
+  const nodeGpus = devices.filter((d) => node?.local ? (!d.host || d.host === "local" || d.host === m?.hostname) : d.host === (m?.hostname || node?.id));
   return (
-    <Page title="Resources" kicker="Host inventory and utilization">
+    <Page title="Resources" subtitle="Host inventory and utilization">
       {error && <p className="banner banner-error">{error}</p>}
+      {nodes.length > 1 && (
+        <div className="filterbar"><select className="input" value={sel} onChange={(e) => setSel(e.target.value)}>{nodes.map((n) => <option key={n.id} value={n.id}>{n.local ? "local" : n.id}{n.metrics?.hostname && n.metrics.hostname !== n.id ? ` · ${n.metrics.hostname}` : ""}</option>)}</select></div>
+      )}
+      <div className="tiles">
+        {m?.cpuPct != null && m.cpuPct >= 0 && <MetricTile label="cpu" value={`${m.cpuPct}%`} tone="dim" meter={m.cpuPct} />}
+        {memPct != null && <MetricTile label="memory" value={`${memPct}%`} tone="dim" meter={memPct} />}
+        {m?.load1 != null && <MetricTile label="load" value={m.load1.toFixed(2)} tone="dim" />}
+        {m?.cores != null && <MetricTile label="cores" value={m.cores} tone="dim" />}
+      </div>
+      <dl className="kv">
+        {m?.hostname && <><dt>hostname</dt><dd>{m.hostname}</dd></>}
+        {m?.kernel && <><dt>kernel</dt><dd>{m.kernel}</dd></>}
+        {m?.memTotalKb ? <><dt>memory</dt><dd>{fmtBytes(m.memTotalKb * 1024)}</dd></> : null}
+        {!m && <><dt>metrics</dt><dd className="muted">not reported for this node yet</dd></>}
+      </dl>
       <Panel title="GPUs" icon={Gpu}>
-        {devices.length ? devices.map((d) => <GpuRow key={`${d.host || "local"}-${d.name}`} device={d} />) : <p className="muted">No GPU devices detected.</p>}
+        {nodeGpus.length ? nodeGpus.map((d) => <GpuRow key={`${d.host || "local"}-${d.name}`} device={d} />) : <p className="muted">No GPU devices on this node.</p>}
       </Panel>
     </Page>
   );

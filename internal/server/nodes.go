@@ -45,6 +45,8 @@ type NodeInventory struct {
 	Rootless NodeCounts        `json:"rootless"`
 	Metrics  *hostinfo.Metrics `json:"metrics,omitempty"`
 	Errors   []string          `json:"errors,omitempty"`
+	Color    string            `json:"color,omitempty"`
+	Display  string            `json:"displayName,omitempty"`
 }
 
 type NodeGroup struct {
@@ -165,6 +167,8 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 	for i := range nodes {
 		if m, ok := meta[nodes[i].ID]; ok {
 			nodes[i].Labels = m.Labels
+			nodes[i].Color = m.Color
+			nodes[i].Display = m.DisplayName
 		}
 	}
 	return nodes
@@ -239,6 +243,43 @@ func (s *Server) handleNodeLabels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "node.labels", id, map[string]any{"labels": req.Labels})
+	writeJSON(w, http.StatusOK, map[string]any{"updated": true, "nodes": s.nodeInventory(r)})
+}
+
+func (s *Server) handleNodeAppearance(w http.ResponseWriter, r *http.Request) {
+	if s.users == nil {
+		httpError(w, http.StatusServiceUnavailable, "no app database configured")
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		httpError(w, http.StatusBadRequest, "missing node id")
+		return
+	}
+	var known bool
+	for _, node := range s.nodeInventory(r) {
+		if node.ID == id {
+			known = true
+			break
+		}
+	}
+	if !known {
+		httpError(w, http.StatusNotFound, "unknown node")
+		return
+	}
+	var req struct {
+		Color       string `json:"color"`
+		DisplayName string `json:"displayName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := appdb.PutNodeAppearance(s.users.DB(), id, strings.TrimSpace(req.Color), strings.TrimSpace(req.DisplayName)); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.audit(r, "node.appearance", id, map[string]any{"color": req.Color, "displayName": req.DisplayName})
 	writeJSON(w, http.StatusOK, map[string]any{"updated": true, "nodes": s.nodeInventory(r)})
 }
 

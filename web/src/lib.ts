@@ -96,6 +96,8 @@ export interface ManagedNode {
   rootless?: NodeCounts;
   metrics?: HostInfo["metrics"];
   errors?: string[];
+  color?: string;
+  displayName?: string;
 }
 
 export interface NodeCounts {
