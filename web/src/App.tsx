@@ -1492,7 +1492,9 @@ function FleetView() {
     <Page title="Fleet" kicker="Managed Podman nodes">
       <div className="tiles">
         <MetricTile label="managed nodes" value={license ? `${license.managedNodes}/${license.nodeLimit}` : nodes.length} tone={license && !license.enterpriseAvailable ? "warn" : "ok"} />
-        {license && <MetricTile label={license.enterpriseAvailable ? "nodes remaining" : "nodes over"} value={license.enterpriseAvailable ? license.nodesRemaining : license.nodesOverLimit} tone={license.enterpriseAvailable ? "ok" : "warn"} />}
+        {/* "managed nodes" already shows X/Y, so remaining is implied; only
+            surface the over-limit case, which X/Y does not convey. */}
+        {license && !license.enterpriseAvailable && <MetricTile label="nodes over" value={license.nodesOverLimit} tone="warn" />}
         <MetricTile label="units" value={totalUnits} tone={totalUnits ? "ok" : "dim"} />
         <MetricTile label="failed" value={failed} tone={failed ? "bad" : "dim"} />
         <MetricTile label="edition" value={license?.edition || "unknown"} tone="dim" />
