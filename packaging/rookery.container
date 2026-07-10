@@ -28,6 +28,13 @@ Volume=/run/systemd:/run/systemd
 PodmanArgs=--pid=host --uts=host
 Volume=/var/log/journal:/var/log/journal:ro
 Volume=/run/podman/podman.sock:/run/podman/podman.sock:ro
+# Host user scopes: rookery discovers rootless users and reaches their
+# sessions via `systemctl --user --machine user@.host`. That needs the
+# host's passwd, homes, per-user runtime dirs, and system D-Bus.
+Volume=/etc/passwd:/etc/passwd:ro
+Volume=/home:/home
+Volume=/run/user:/run/user
+Volume=/run/dbus:/run/dbus
 # The HOST's quadlet generator, so validation matches the Podman that will
 # actually run the units (Fedora/RHEL path — adjust for other distros).
 # Without it, validation degrades to "unavailable" but everything else works.

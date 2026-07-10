@@ -1,8 +1,10 @@
 // Package agent is the control-plane side of the rookery-agent connector: a
-// thin HTTP client that reaches one agent, which speaks for one rootless (or
-// system) podman/systemd scope on some host. It is the third transport beside
-// local (this process's own scope) and rhost (ssh) — the one that needs no
-// privilege crossing, because the agent already runs inside the target scope.
+// thin HTTP client that reaches one per-host agent. The agent serves every
+// scope on its host (system + each user), so every call names a scope; the
+// control plane discovers the scopes with Scopes() and turns each into a node
+// area. This is the third transport beside local (this process's own scope)
+// and rhost (ssh) — the one that needs no privilege crossing, because the
+// agent already runs as root inside the target host.
 package agent
 
 import (
@@ -20,7 +22,7 @@ import (
 	api "github.com/rookerylabs/rookery-agent-api"
 )
 
-// Client talks to one rookery-agent.
+// Client talks to one rookery-agent (one host).
 type Client struct {
 	base  string
 	token string
@@ -35,6 +37,11 @@ func New(baseURL, token string) *Client {
 		token: token,
 		http:  &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+// scoped appends ?scope=<id> to a path.
+func scoped(path, scope string) string {
+	return path + "?" + api.ScopeParam + "=" + url.QueryEscape(scope)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, out any) error {
@@ -58,42 +65,41 @@ func (c *Client) do(ctx context.Context, method, path string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// Info returns the scope identity and podman summary.
-func (c *Client) Info(ctx context.Context) (api.Info, error) {
-	var info api.Info
-	err := c.do(ctx, http.MethodGet, api.PathInfo, &info)
+// Scopes discovers the host's scopes (system + each user).
+func (c *Client) Scopes(ctx context.Context) (api.HostInfo, error) {
+	var info api.HostInfo
+	err := c.do(ctx, http.MethodGet, api.PathScopes, &info)
 	return info, err
 }
 
-// Units returns every Quadlet unit in the scope with live systemd status.
-func (c *Client) Units(ctx context.Context) ([]api.Unit, error) {
+// Units returns a scope's Quadlet units with live systemd status.
+func (c *Client) Units(ctx context.Context, scope string) ([]api.Unit, error) {
 	var units []api.Unit
-	err := c.do(ctx, http.MethodGet, api.PathUnits, &units)
+	err := c.do(ctx, http.MethodGet, scoped(api.PathUnits, scope), &units)
 	return units, err
 }
 
-// Containers lists the scope's containers.
-func (c *Client) Containers(ctx context.Context) ([]api.Container, error) {
+// Containers lists a scope's containers.
+func (c *Client) Containers(ctx context.Context, scope string) ([]api.Container, error) {
 	var cs []api.Container
-	err := c.do(ctx, http.MethodGet, api.PathContainers, &cs)
+	err := c.do(ctx, http.MethodGet, scoped(api.PathContainers, scope), &cs)
 	return cs, err
 }
 
-// Stats returns a live resource sample per container.
-func (c *Client) Stats(ctx context.Context) ([]api.Stat, error) {
+// Stats returns a live resource sample per container in a scope.
+func (c *Client) Stats(ctx context.Context, scope string) ([]api.Stat, error) {
 	var st []api.Stat
-	err := c.do(ctx, http.MethodGet, api.PathStats, &st)
+	err := c.do(ctx, http.MethodGet, scoped(api.PathStats, scope), &st)
 	return st, err
 }
 
-// Action runs a lifecycle verb (start/stop/restart/enable/disable) against a
-// unit or service name in the scope.
-func (c *Client) Action(ctx context.Context, unit, action string) error {
+// Action runs a lifecycle verb against a unit or service in a scope.
+func (c *Client) Action(ctx context.Context, scope, unit, action string) error {
 	if !api.ValidAction(action) {
 		return fmt.Errorf("unknown action %q", action)
 	}
 	var res api.ActionResult
-	if err := c.do(ctx, http.MethodPost, api.PathUnitsPrefix+unit+"/"+action, &res); err != nil {
+	if err := c.do(ctx, http.MethodPost, scoped(api.PathUnitsPrefix+unit+"/"+action, scope), &res); err != nil {
 		return err
 	}
 	if !res.OK {
@@ -102,13 +108,11 @@ func (c *Client) Action(ctx context.Context, unit, action string) error {
 	return nil
 }
 
-// DaemonReload re-runs the scope's Quadlet generator.
-func (c *Client) DaemonReload(ctx context.Context) error {
-	return c.do(ctx, http.MethodPost, api.PathDaemonReload, nil)
+// DaemonReload re-runs a scope's Quadlet generator.
+func (c *Client) DaemonReload(ctx context.Context, scope string) error {
+	return c.do(ctx, http.MethodPost, scoped(api.PathDaemonReload, scope), nil)
 }
 
-// raw performs a request whose body/response are plain bytes (unit files,
-// logs) rather than JSON.
 func (c *Client) raw(ctx context.Context, method, path string, body []byte) ([]byte, error) {
 	var r io.Reader
 	if body != nil {
@@ -131,37 +135,33 @@ func (c *Client) raw(ctx context.Context, method, path string, body []byte) ([]b
 	return io.ReadAll(resp.Body)
 }
 
-// UnitFile returns the raw Quadlet file contents for a unit.
-func (c *Client) UnitFile(ctx context.Context, name string) ([]byte, error) {
-	return c.raw(ctx, http.MethodGet, api.UnitFileURL(name), nil)
+// UnitFile returns the raw Quadlet file contents for a unit in a scope.
+func (c *Client) UnitFile(ctx context.Context, scope, name string) ([]byte, error) {
+	return c.raw(ctx, http.MethodGet, scoped(api.UnitFileURL(name), scope), nil)
 }
 
-// WriteUnitFile writes a unit's contents and triggers a daemon-reload on the
-// agent side.
-func (c *Client) WriteUnitFile(ctx context.Context, name string, data []byte) error {
-	_, err := c.raw(ctx, http.MethodPut, api.UnitFileURL(name), data)
+// WriteUnitFile writes a unit's contents in a scope and daemon-reloads there.
+func (c *Client) WriteUnitFile(ctx context.Context, scope, name string, data []byte) error {
+	_, err := c.raw(ctx, http.MethodPut, scoped(api.UnitFileURL(name), scope), data)
 	return err
 }
 
-// DeleteUnitFile removes a unit file and daemon-reloads on the agent side.
-func (c *Client) DeleteUnitFile(ctx context.Context, name string) error {
-	_, err := c.raw(ctx, http.MethodDelete, api.UnitFileURL(name), nil)
+// DeleteUnitFile removes a unit file in a scope and daemon-reloads there.
+func (c *Client) DeleteUnitFile(ctx context.Context, scope, name string) error {
+	_, err := c.raw(ctx, http.MethodDelete, scoped(api.UnitFileURL(name), scope), nil)
 	return err
 }
 
-// Logs returns the journal tail for a unit.
-func (c *Client) Logs(ctx context.Context, name string, lines int, since string) (string, error) {
+// Logs returns the journal tail for a unit in a scope.
+func (c *Client) Logs(ctx context.Context, scope, name string, lines int, since string) (string, error) {
 	q := url.Values{}
+	q.Set(api.ScopeParam, scope)
 	if lines > 0 {
 		q.Set("lines", strconv.Itoa(lines))
 	}
 	if since != "" {
 		q.Set("since", since)
 	}
-	path := api.UnitLogsURL(name)
-	if len(q) > 0 {
-		path += "?" + q.Encode()
-	}
-	b, err := c.raw(ctx, http.MethodGet, path, nil)
+	b, err := c.raw(ctx, http.MethodGet, api.UnitLogsURL(name)+"?"+q.Encode(), nil)
 	return string(b), err
 }

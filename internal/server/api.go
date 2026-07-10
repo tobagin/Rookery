@@ -264,7 +264,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	out := map[string]unitStats{}
 	for _, area := range s.areasSnapshot() {
 		if area.ViaAgent() {
-			units, err := area.Agent.Units(r.Context())
+			units, err := area.Agent.Units(r.Context(), area.AgentScope)
 			if err != nil {
 				continue
 			}

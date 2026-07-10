@@ -49,7 +49,7 @@ func agentUnitJSON(area Area, u papi.Unit) unitJSON {
 // minimal record if the agent doesn't list it. Shared by the get/save paths
 // so the refreshed unit they return looks like the list's.
 func (s *Server) agentUnit(r *http.Request, area Area, name string) unitJSON {
-	units, _ := area.Agent.Units(r.Context())
+	units, _ := area.Agent.Units(r.Context(), area.AgentScope)
 	for _, u := range units {
 		if u.Name == name {
 			return agentUnitJSON(area, u)
@@ -82,7 +82,7 @@ func enrichFromContent(uj *unitJSON, name string, data []byte) {
 // attaching live stats. A fetch error is recorded per-scope, mirroring the
 // local path, so one dead agent never blanks the whole list.
 func (s *Server) appendAgentUnits(r *http.Request, area Area, out []unitJSON, scopeErrors map[string]string) []unitJSON {
-	units, err := area.Agent.Units(r.Context())
+	units, err := area.Agent.Units(r.Context(), area.AgentScope)
 	if err != nil {
 		scopeErrors[area.Label] = err.Error()
 		return out
@@ -105,11 +105,11 @@ func (s *Server) appendAgentUnits(r *http.Request, area Area, out []unitJSON, sc
 // so it arrives on the container without an extra round trip.
 func agentRuntimeByService(ctx context.Context, area Area) map[string]unitRuntime {
 	out := map[string]unitRuntime{}
-	containers, err := area.Agent.Containers(ctx)
+	containers, err := area.Agent.Containers(ctx, area.AgentScope)
 	if err != nil {
 		return out
 	}
-	statsRows, _ := area.Agent.Stats(ctx)
+	statsRows, _ := area.Agent.Stats(ctx, area.AgentScope)
 	stats := map[string]unitStats{}
 	for _, row := range statsRows {
 		st := unitStats{CPUPct: row.CPUPct, MemBytes: row.MemBytes}
@@ -147,7 +147,7 @@ func (s *Server) handleAgentGetUnit(w http.ResponseWriter, r *http.Request, area
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := area.Agent.UnitFile(r.Context(), name)
+	data, err := area.Agent.UnitFile(r.Context(), area.AgentScope, name)
 	if err != nil {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
@@ -177,14 +177,14 @@ func (s *Server) handleAgentPutUnit(w http.ResponseWriter, r *http.Request, area
 		return
 	}
 	if req.BaseContent != nil {
-		if cur, err := area.Agent.UnitFile(r.Context(), name); err == nil && string(cur) != *req.BaseContent {
+		if cur, err := area.Agent.UnitFile(r.Context(), area.AgentScope, name); err == nil && string(cur) != *req.BaseContent {
 			httpError(w, http.StatusConflict,
 				name+" changed on the agent since this editor loaded it — reload the unit, then re-apply your edit")
 			return
 		}
 	}
 	created := true
-	if _, err := area.Agent.UnitFile(r.Context(), name); err == nil {
+	if _, err := area.Agent.UnitFile(r.Context(), area.AgentScope, name); err == nil {
 		created = false
 	}
 	validation, err := s.areaValidate(r.Context(), area, name, req.Content)
@@ -196,14 +196,14 @@ func (s *Server) handleAgentPutUnit(w http.ResponseWriter, r *http.Request, area
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"validation": validation})
 		return
 	}
-	if err := area.Agent.WriteUnitFile(r.Context(), name, []byte(req.Content)); err != nil {
+	if err := area.Agent.WriteUnitFile(r.Context(), area.AgentScope, name, []byte(req.Content)); err != nil {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	warnings := []string{}
 	if req.Restart {
 		service, _ := quadlet.ServiceName(name)
-		if err := area.Agent.Action(r.Context(), service, papi.ActionRestart); err != nil {
+		if err := area.Agent.Action(r.Context(), area.AgentScope, service, papi.ActionRestart); err != nil {
 			warnings = append(warnings, "restart: "+err.Error())
 		}
 	}
@@ -221,8 +221,8 @@ func (s *Server) handleAgentDeleteUnit(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	service, _ := quadlet.ServiceName(name)
-	_ = area.Agent.Action(r.Context(), service, papi.ActionStop) // best effort
-	if err := area.Agent.DeleteUnitFile(r.Context(), name); err != nil {
+	_ = area.Agent.Action(r.Context(), area.AgentScope, service, papi.ActionStop) // best effort
+	if err := area.Agent.DeleteUnitFile(r.Context(), area.AgentScope, name); err != nil {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -233,7 +233,7 @@ func (s *Server) handleAgentDeleteUnit(w http.ResponseWriter, r *http.Request, a
 // setAgentInstall enables/disables a unit by rewriting its [Install] section
 // through the agent, mirroring the local setQuadletInstall.
 func (s *Server) setAgentInstall(w http.ResponseWriter, r *http.Request, area Area, name string, enabled bool) {
-	data, err := area.Agent.UnitFile(r.Context(), name)
+	data, err := area.Agent.UnitFile(r.Context(), area.AgentScope, name)
 	if err != nil {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
@@ -243,7 +243,7 @@ func (s *Server) setAgentInstall(w http.ResponseWriter, r *http.Request, area Ar
 		target = "default.target"
 	}
 	content := setInstallEnabled(string(data), enabled, target)
-	if err := area.Agent.WriteUnitFile(r.Context(), name, []byte(content)); err != nil {
+	if err := area.Agent.WriteUnitFile(r.Context(), area.AgentScope, name, []byte(content)); err != nil {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -271,7 +271,7 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request, area Ar
 	if n, err := strconv.Atoi(r.URL.Query().Get("lines")); err == nil && n > 0 && n <= 5000 {
 		lines = n
 	}
-	out, err := area.Agent.Logs(r.Context(), name, lines, strings.TrimSpace(r.URL.Query().Get("since")))
+	out, err := area.Agent.Logs(r.Context(), area.AgentScope, name, lines, strings.TrimSpace(r.URL.Query().Get("since")))
 	if err != nil {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
@@ -318,7 +318,7 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request, area 
 		return
 	}
 	service, _ := quadlet.ServiceName(name)
-	if err := area.Agent.Action(r.Context(), service, req.Action); err != nil {
+	if err := area.Agent.Action(r.Context(), area.AgentScope, service, req.Action); err != nil {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}

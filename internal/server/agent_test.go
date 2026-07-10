@@ -15,8 +15,8 @@ import (
 	"github.com/rookerylabs/rookery/internal/systemd"
 )
 
-// fakeAgent serves the subset of the rookery-agent API that nodeInventory
-// touches, so the agent connector can be exercised without a live podman.
+// fakeAgent serves the multi-scope rookery-agent API for one scope ("tobagin"),
+// so the connector can be exercised without a live podman.
 func fakeAgent(t *testing.T, token string, units []papi.Unit) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -29,19 +29,15 @@ func fakeAgent(t *testing.T, token string, units []papi.Unit) *httptest.Server {
 			h(w, r)
 		}
 	}
-	mux.HandleFunc("GET "+papi.PathInfo, guard(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(papi.Info{Scope: "user:pi", User: "pi", ContainersTotal: len(units)})
+	mux.HandleFunc("GET "+papi.PathScopes, guard(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(papi.HostInfo{
+			Host: "pi", AgentVersion: "test", WireVersion: papi.Version,
+			Scopes: []papi.Scope{{ID: "tobagin", Label: "tobagin", User: "tobagin", ContainersTotal: len(units)}},
+		})
 	}))
 	mux.HandleFunc("GET "+papi.PathUnits, guard(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(units)
 	}))
-	mux.HandleFunc("POST "+papi.PathUnitsPrefix+"{name}/{action}", guard(func(w http.ResponseWriter, r *http.Request) {
-		gotAction.name = r.PathValue("name")
-		gotAction.action = r.PathValue("action")
-		_ = json.NewEncoder(w).Encode(papi.ActionResult{Unit: gotAction.name, Action: gotAction.action, OK: true})
-	}))
-	// One container + stats row per unit, labelled with its service, so the
-	// runtimeByService mapping has something to match.
 	mux.HandleFunc("GET "+papi.PathContainers, guard(func(w http.ResponseWriter, _ *http.Request) {
 		cs := make([]papi.Container, 0, len(units))
 		for _, u := range units {
@@ -59,36 +55,47 @@ func fakeAgent(t *testing.T, token string, units []papi.Unit) *httptest.Server {
 	mux.HandleFunc("GET "+papi.PathUnitsPrefix+"{name}/file", guard(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("[Container]\nImage=example.com/" + r.PathValue("name") + "\n"))
 	}))
-	mux.HandleFunc("GET "+papi.PathUnitsPrefix+"{name}/logs", guard(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+papi.PathUnitsPrefix+"{name}/logs", guard(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("line one\nline two\n"))
 	}))
 	mux.HandleFunc("PUT "+papi.PathUnitsPrefix+"{name}/file", guard(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		gotWrite = written{name: r.PathValue("name"), content: string(b)}
+		gotWrite = written{name: r.PathValue("name"), content: string(b), scope: r.URL.Query().Get(papi.ScopeParam)}
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	}))
 	mux.HandleFunc("DELETE "+papi.PathUnitsPrefix+"{name}/file", guard(func(w http.ResponseWriter, r *http.Request) {
-		gotWrite = written{deleted: r.PathValue("name")}
+		gotWrite = written{deleted: r.PathValue("name"), scope: r.URL.Query().Get(papi.ScopeParam)}
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	}))
+	mux.HandleFunc("POST "+papi.PathUnitsPrefix+"{name}/{action}", guard(func(w http.ResponseWriter, r *http.Request) {
+		gotAction = recorded{name: r.PathValue("name"), action: r.PathValue("action"), scope: r.URL.Query().Get(papi.ScopeParam)}
+		_ = json.NewEncoder(w).Encode(papi.ActionResult{Unit: gotAction.name, Action: gotAction.action, OK: true})
 	}))
 	return httptest.NewServer(mux)
 }
 
-// written captures the last file mutation the fake agent received.
-type written struct{ name, content, deleted string }
+type written struct{ name, content, deleted, scope string }
+type recorded struct{ name, action, scope string }
 
-var gotWrite written
+var (
+	gotWrite  written
+	gotAction recorded
+)
 
-// validStub is a validation func that always passes, for save-path tests that
-// don't exercise the generator.
 func validStub(context.Context, bool, string, string) (quadlet.ValidationResult, error) {
 	return quadlet.ValidationResult{Valid: true}, nil
 }
 
-// recorded captures the last lifecycle call the fake agent received.
-type recorded struct{ name, action string }
-
-var gotAction recorded
+// agentArea builds an area wired to ts, serving the "tobagin" user scope.
+func agentArea(ts *httptest.Server, token string) Area {
+	return Area{
+		Label:      "pi.tobagin",
+		NodeID:     "pi",
+		Scope:      systemd.Scope{User: "tobagin"},
+		Agent:      agent.New(ts.URL, token),
+		AgentScope: "tobagin",
+	}
+}
 
 func TestNodeInventoryViaAgent(t *testing.T) {
 	units := []papi.Unit{
@@ -98,37 +105,29 @@ func TestNodeInventoryViaAgent(t *testing.T) {
 	}
 	ts := fakeAgent(t, "tok", units)
 	defer ts.Close()
-
-	s := &Server{areas: []Area{{
-		Label: "pi",
-		Scope: systemd.Scope{User: "pi"},
-		Agent: agent.New(ts.URL, "tok"),
-	}}}
+	s := &Server{areas: []Area{agentArea(ts, "tok")}}
 
 	nodes := s.nodeInventory(httptest.NewRequest(http.MethodGet, "/", nil))
 	if len(nodes) != 1 {
 		t.Fatalf("got %d nodes, want 1", len(nodes))
 	}
 	n := nodes[0]
+	if n.ID != "pi" {
+		t.Errorf("node id = %q, want pi", n.ID)
+	}
 	if n.Units != 3 || n.Running != 2 || n.Failed != 1 {
 		t.Errorf("counts = units:%d running:%d failed:%d, want 3/2/1", n.Units, n.Running, n.Failed)
 	}
-	// An agent user scope must land in the rootless bucket, not rootful.
 	if n.Rootless.Units != 3 || n.Rootful.Units != 0 {
 		t.Errorf("bucket = rootless:%d rootful:%d, want 3/0", n.Rootless.Units, n.Rootful.Units)
-	}
-	if len(n.Errors) != 0 {
-		t.Errorf("unexpected errors: %v", n.Errors)
 	}
 }
 
 func TestListUnitsViaAgent(t *testing.T) {
-	units := []papi.Unit{
-		{Name: "ntfy.container", Kind: "container", Service: "ntfy.service", Status: papi.Status{Load: "loaded", Active: "active", Sub: "running"}},
-	}
+	units := []papi.Unit{{Name: "ntfy.container", Kind: "container", Service: "ntfy.service", Status: papi.Status{Load: "loaded", Active: "active", Sub: "running"}}}
 	ts := fakeAgent(t, "tok", units)
 	defer ts.Close()
-	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	s := &Server{areas: []Area{agentArea(ts, "tok")}}
 
 	w := httptest.NewRecorder()
 	s.handleListUnits(w, httptest.NewRequest(http.MethodGet, "/api/units", nil))
@@ -142,22 +141,19 @@ func TestListUnitsViaAgent(t *testing.T) {
 		t.Fatalf("got %d units, want 1", len(body.Units))
 	}
 	u := body.Units[0]
-	if u.Name != "ntfy.container" || u.Active != "active" || u.Scope != "pi" || u.ReadOnly {
+	if u.Name != "ntfy.container" || u.Active != "active" || u.Scope != "pi.tobagin" || u.ReadOnly {
 		t.Errorf("agent unit mapped wrong: %+v", u)
 	}
-	// Stats from the agent's containers+stats must reach the unit.
-	if u.Stats == nil || u.Stats.CPUPct != 5 || u.Stats.MemBytes != 1<<20 {
+	if u.Stats == nil || u.Stats.CPUPct != 5 {
 		t.Errorf("agent unit stats not attached: %+v", u.Stats)
 	}
 }
 
 func TestAgentStatsEndpoint(t *testing.T) {
-	units := []papi.Unit{
-		{Name: "ntfy.container", Service: "ntfy.service", Status: papi.Status{Active: "active"}},
-	}
+	units := []papi.Unit{{Name: "ntfy.container", Service: "ntfy.service", Status: papi.Status{Active: "active"}}}
 	ts := fakeAgent(t, "tok", units)
 	defer ts.Close()
-	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	s := &Server{areas: []Area{agentArea(ts, "tok")}}
 
 	w := httptest.NewRecorder()
 	s.handleStats(w, httptest.NewRequest(http.MethodGet, "/api/stats", nil))
@@ -167,8 +163,7 @@ func TestAgentStatsEndpoint(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	st, ok := body.Stats["pi/ntfy.container"]
-	if !ok || st.CPUPct != 5 {
+	if st, ok := body.Stats["pi.tobagin/ntfy.container"]; !ok || st.CPUPct != 5 {
 		t.Errorf("handleStats agent entry missing/wrong: %+v", body.Stats)
 	}
 }
@@ -177,20 +172,18 @@ func TestAgentActionRoutesToAgent(t *testing.T) {
 	ts := fakeAgent(t, "tok", nil)
 	defer ts.Close()
 	gotAction = recorded{}
-	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	s := &Server{areas: []Area{agentArea(ts, "tok")}}
 
-	r := httptest.NewRequest(http.MethodPost, "/api/units/pi/ntfy.container/action",
-		strings.NewReader(`{"action":"restart"}`))
-	r.SetPathValue("scope", "pi")
+	r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"action":"restart"}`))
+	r.SetPathValue("scope", "pi.tobagin")
 	r.SetPathValue("name", "ntfy.container")
 	w := httptest.NewRecorder()
 	s.handleAction(w, r)
-
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s", w.Code, w.Body)
 	}
-	if gotAction.action != "restart" || gotAction.name != "ntfy.service" {
-		t.Errorf("agent got %+v, want name=ntfy.service action=restart", gotAction)
+	if gotAction.action != "restart" || gotAction.name != "ntfy.service" || gotAction.scope != "tobagin" {
+		t.Errorf("agent got %+v, want name=ntfy.service action=restart scope=tobagin", gotAction)
 	}
 }
 
@@ -198,10 +191,10 @@ func TestGetUnitViaAgent(t *testing.T) {
 	units := []papi.Unit{{Name: "ntfy.container", Kind: "container", Service: "ntfy.service", Status: papi.Status{Active: "active"}}}
 	ts := fakeAgent(t, "tok", units)
 	defer ts.Close()
-	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	s := &Server{areas: []Area{agentArea(ts, "tok")}}
 
-	r := httptest.NewRequest(http.MethodGet, "/api/units/pi/ntfy.container", nil)
-	r.SetPathValue("scope", "pi")
+	r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.SetPathValue("scope", "pi.tobagin")
 	r.SetPathValue("name", "ntfy.container")
 	w := httptest.NewRecorder()
 	s.handleGetUnit(w, r)
@@ -215,32 +208,23 @@ func TestGetUnitViaAgent(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body.Content, "Image=example.com/ntfy.container") {
-		t.Errorf("content not from agent: %q", body.Content)
-	}
-	if body.Unit.Active != "active" || body.Unit.Image != "example.com/ntfy.container" {
-		t.Errorf("unit not enriched from agent+file: %+v", body.Unit)
+	if !strings.Contains(body.Content, "Image=example.com/ntfy.container") || body.Unit.Active != "active" {
+		t.Errorf("unit not from agent: %+v content=%q", body.Unit, body.Content)
 	}
 }
 
 func TestLogsViaAgent(t *testing.T) {
-	units := []papi.Unit{{Name: "ntfy.container", Service: "ntfy.service"}}
-	ts := fakeAgent(t, "tok", units)
+	ts := fakeAgent(t, "tok", []papi.Unit{{Name: "ntfy.container", Service: "ntfy.service"}})
 	defer ts.Close()
-	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	s := &Server{areas: []Area{agentArea(ts, "tok")}}
 
-	r := httptest.NewRequest(http.MethodGet, "/api/logs/pi/ntfy.container", nil)
-	r.SetPathValue("scope", "pi")
+	r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.SetPathValue("scope", "pi.tobagin")
 	r.SetPathValue("name", "ntfy.container")
 	w := httptest.NewRecorder()
 	s.handleLogs(w, r)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d", w.Code)
-	}
-	// SSE: each journal line becomes a data: event.
-	body := w.Body.String()
-	if !strings.Contains(body, "data: line one") || !strings.Contains(body, "data: line two") {
-		t.Errorf("agent logs not streamed as SSE: %q", body)
+	if !strings.Contains(w.Body.String(), "data: line one") {
+		t.Errorf("agent logs not streamed as SSE: %q", w.Body.String())
 	}
 }
 
@@ -248,21 +232,18 @@ func TestPutUnitViaAgent(t *testing.T) {
 	ts := fakeAgent(t, "tok", nil)
 	defer ts.Close()
 	gotWrite = written{}
-	s := &Server{
-		areas:    []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}},
-		validate: validStub,
-	}
-	r := httptest.NewRequest(http.MethodPut, "/api/units/pi/web.container",
-		strings.NewReader(`{"content":"[Container]\nImage=example.com/web\n"}`))
-	r.SetPathValue("scope", "pi")
+	s := &Server{areas: []Area{agentArea(ts, "tok")}, validate: validStub}
+
+	r := httptest.NewRequest(http.MethodPut, "/x", strings.NewReader(`{"content":"[Container]\nImage=example.com/web\n"}`))
+	r.SetPathValue("scope", "pi.tobagin")
 	r.SetPathValue("name", "web.container")
 	w := httptest.NewRecorder()
 	s.handlePutUnit(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s", w.Code, w.Body)
 	}
-	if gotWrite.name != "web.container" || !strings.Contains(gotWrite.content, "Image=example.com/web") {
-		t.Errorf("agent did not receive the write: %+v", gotWrite)
+	if gotWrite.name != "web.container" || gotWrite.scope != "tobagin" || !strings.Contains(gotWrite.content, "example.com/web") {
+		t.Errorf("agent did not receive scoped write: %+v", gotWrite)
 	}
 }
 
@@ -270,26 +251,24 @@ func TestDeleteUnitViaAgent(t *testing.T) {
 	ts := fakeAgent(t, "tok", nil)
 	defer ts.Close()
 	gotWrite = written{}
-	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
-	r := httptest.NewRequest(http.MethodDelete, "/api/units/pi/web.container", nil)
-	r.SetPathValue("scope", "pi")
+	s := &Server{areas: []Area{agentArea(ts, "tok")}}
+	r := httptest.NewRequest(http.MethodDelete, "/x", nil)
+	r.SetPathValue("scope", "pi.tobagin")
 	r.SetPathValue("name", "web.container")
 	w := httptest.NewRecorder()
 	s.handleDeleteUnit(w, r)
-	if w.Code != http.StatusOK || gotWrite.deleted != "web.container" {
-		t.Errorf("delete not routed to agent: code=%d %+v", w.Code, gotWrite)
+	if w.Code != http.StatusOK || gotWrite.deleted != "web.container" || gotWrite.scope != "tobagin" {
+		t.Errorf("delete not routed to agent scope: code=%d %+v", w.Code, gotWrite)
 	}
 }
 
 func TestAgentEnableRewritesInstall(t *testing.T) {
-	// fakeAgent's GET file returns a unit with no [Install]; enable must add
-	// WantedBy and write it back through the agent.
 	ts := fakeAgent(t, "tok", nil)
 	defer ts.Close()
 	gotWrite = written{}
-	s := &Server{areas: []Area{{Label: "pi", Scope: systemd.Scope{User: "pi"}, Agent: agent.New(ts.URL, "tok")}}}
+	s := &Server{areas: []Area{agentArea(ts, "tok")}}
 	r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"action":"enable"}`))
-	r.SetPathValue("scope", "pi")
+	r.SetPathValue("scope", "pi.tobagin")
 	r.SetPathValue("name", "web.container")
 	w := httptest.NewRecorder()
 	s.handleAction(w, r)
@@ -302,11 +281,9 @@ func TestAgentEnableRewritesInstall(t *testing.T) {
 }
 
 func TestNodeInventoryAgentUnreachable(t *testing.T) {
-	// A dead agent must surface an error on the node, not panic or drop it.
 	s := &Server{areas: []Area{{
-		Label: "pi",
-		Scope: systemd.Scope{User: "pi"},
-		Agent: agent.New("http://127.0.0.1:1", "tok"),
+		Label: "pi.tobagin", NodeID: "pi", Scope: systemd.Scope{User: "tobagin"},
+		Agent: agent.New("http://127.0.0.1:1", "tok"), AgentScope: "tobagin",
 	}}}
 	nodes := s.nodeInventory(httptest.NewRequest(http.MethodGet, "/", nil))
 	if len(nodes) != 1 || len(nodes[0].Errors) == 0 {

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	api "github.com/rookerylabs/rookery-agent-api"
 	"github.com/rookerylabs/rookery/internal/agent"
 	"github.com/rookerylabs/rookery/internal/alert"
 	"github.com/rookerylabs/rookery/internal/appdb"
@@ -46,7 +47,7 @@ func main() {
 	remotes := flag.String("remotes", envOr("ROOKERY_REMOTES", ""),
 		`comma-separated remote hosts to manage over ssh, as alias=user@host (e.g. "nas=root@nas.local,media=deploy@media.lan")`)
 	agents := flag.String("agents", envOr("ROOKERY_AGENTS", ""),
-		`comma-separated rookery-agents to manage, as alias=url (e.g. "pi=http://10.87.0.5:7666"); each speaks for one rootless/system scope`)
+		`comma-separated rookery-agents to manage, as alias=url (e.g. "pi=http://10.87.0.5:7666"); the agent serves every scope on its host`)
 	agentToken := flag.String("agent-token", envOr("ROOKERY_AGENT_TOKEN", ""),
 		"shared bearer token presented to rookery-agents")
 	alerts := flag.String("alerts", envOr("ROOKERY_ALERTS", ""),
@@ -547,24 +548,39 @@ func agentAreas(spec, token string) ([]server.Area, error) {
 		}
 		cli := agent.New(url, token)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		info, err := cli.Info(ctx)
+		info, err := cli.Scopes(ctx)
 		cancel()
 		if err != nil {
 			log.Printf("WARNING: agent %s (%s) unreachable, skipping: %v", alias, url, err)
 			continue
 		}
-		nodeID := alias
-		if node, scope, ok := strings.Cut(alias, "."); ok && node != "" && groupedRemoteScope(scope) {
-			nodeID = node
+		// One agent serves every scope on its host; register an area per
+		// scope, all grouped under the host's node (NodeID = alias). The label
+		// is alias.<scopeID> (e.g. pi.system, pi.tobagin) so the API path
+		// segment stays unique and readable.
+		for _, sc := range info.Scopes {
+			area := server.Area{
+				Label:      alias + "." + sc.ID,
+				NodeID:     alias,
+				Agent:      cli,
+				AgentScope: sc.ID,
+			}
+			if !sc.System {
+				area.Scope = systemd.Scope{User: sc.User}
+			}
+			areas = append(areas, area)
 		}
-		area := server.Area{Label: alias, NodeID: nodeID, Agent: cli}
-		if !info.System {
-			area.Scope = systemd.Scope{User: info.User}
-		}
-		log.Printf("agent %s: %s (%s scope, %d containers)", alias, url, area.Scope, info.ContainersTotal)
-		areas = append(areas, area)
+		log.Printf("agent %s: %s (%d scopes: %s)", alias, url, len(info.Scopes), scopeLabels(info.Scopes))
 	}
 	return areas, nil
+}
+
+func scopeLabels(scopes []api.Scope) string {
+	out := make([]string, len(scopes))
+	for i, s := range scopes {
+		out[i] = s.ID
+	}
+	return strings.Join(out, " ")
 }
 
 func groupedRemoteScope(scope string) bool {

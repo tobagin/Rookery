@@ -72,10 +72,11 @@ type Area struct {
 	// repository and serves history/rollback. Local areas only.
 	Git *gitstore.Store
 	// Agent, when set, reaches this area through a rookery-agent over HTTP
-	// instead of local systemctl or ssh. The agent runs inside the target
-	// scope, so no privilege crossing is needed. Mutually exclusive with a
+	// instead of local systemctl or ssh. One agent serves many scopes on its
+	// host; AgentScope names which one this area is. Mutually exclusive with a
 	// remote (ssh) scope.
-	Agent *agent.Client
+	Agent      *agent.Client
+	AgentScope string
 }
 
 // Remote reports whether this area's files and systemd live on another

@@ -102,7 +102,7 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 		// Agent-backed areas return units with status already attached in one
 		// call — no separate discover + systemctl show. Count straight from it.
 		if area.ViaAgent() {
-			units, err := area.Agent.Units(r.Context())
+			units, err := area.Agent.Units(r.Context(), area.AgentScope)
 			if err != nil {
 				node.Errors = append(node.Errors, area.Label+": "+err.Error())
 				continue
