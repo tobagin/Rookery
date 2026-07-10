@@ -66,6 +66,7 @@ import {
   insertIntoSection,
   LicenseStatus,
   ManagedNode,
+  NodeCounts,
   NodeGroup,
   PolicyFinding,
   lineDiff,
@@ -359,6 +360,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
           <div className="top-actions">
             <ThemeSwitch theme={theme} setTheme={setTheme} />
             {!auth.readOnly && currentView && <button className="btn btn-accent" onClick={() => setNewUnitOpen(true)}><Plus size={16} /> Add {currentView.singular}</button>}
+            {!auth.readOnly && auth.role === "admin" && location.pathname === "/fleet" && <Link className="btn btn-accent" to="/fleet?new=1"><Plus size={16} /> Add node</Link>}
             {!auth.readOnly && auth.required && auth.authenticated && <button className="btn btn-ghost" onClick={copyShare}><Github size={16} /> Share</button>}
             <button className="btn icon-only mobile-more" onClick={() => setMoreOpen((v) => !v)} aria-label="More"><Menu size={18} /></button>
           </div>
@@ -1203,7 +1205,7 @@ function UnitDetail() {
     <Page
       title={unit.name}
       kicker={`${unit.kind} · ${scopeKind} · ${unit.scope}`}
-      back={<Link className="btn icon-only" to="/units"><ChevronLeft size={18} /></Link>}
+      back={<Link className="btn icon-only" to={viewForKind(unit.kind)}><ChevronLeft size={18} /></Link>}
       action={!auth.readOnly && <div className="action-row"><button className="btn" disabled={!!acting} onClick={() => lifecycle("start")}>{acting === "start" ? <RefreshCw className="spin" size={16} /> : <Play size={16} />} Start</button><button className="btn" disabled={!!acting} onClick={() => lifecycle("stop")}>{acting === "stop" ? <RefreshCw className="spin" size={16} /> : <CircleStop size={16} />} Stop</button><button className="btn" disabled={!!acting} onClick={() => lifecycle("restart")}>{acting === "restart" ? <RefreshCw className="spin" size={16} /> : <RefreshCw size={16} />} Restart</button></div>}
     >
       <div className="detail-summary">
@@ -1544,6 +1546,9 @@ function FleetView() {
   const [newNodeID, setNewNodeID] = useState("");
   const [newNodeTarget, setNewNodeTarget] = useState("");
   const [q, setQ] = useState("");
+  const [params, setParams] = useSearchParams();
+  const addOpen = auth.role === "admin" && !auth.readOnly && params.get("new") === "1";
+  function closeAdd() { const next = new URLSearchParams(params); next.delete("new"); setParams(next, { replace: true }); }
   const load = useCallback(async () => {
     try {
       const { body } = await api<{ nodes?: ManagedNode[]; license?: LicenseStatus }>("/api/nodes");
@@ -1570,6 +1575,7 @@ function FleetView() {
       setNewNodeID("");
       setNewNodeTarget("");
       toast("remote node added");
+      closeAdd();
       load();
     } catch (e) {
       toast((e as Error).message, true);
@@ -1587,13 +1593,13 @@ function FleetView() {
         <MetricTile label="edition" value={license?.edition || "unknown"} tone="dim" />
       </div>
       {license?.message && <p className={`banner ${license.enterpriseAvailable ? "" : "banner-warn"}`}>{license.message}</p>}
-      {auth.role === "admin" && !auth.readOnly && <Panel title="Add remote" icon={Plus}>
-        <div className="filterbar">
-          <input className="input" placeholder="node id, e.g. nas" value={newNodeID} onChange={(e) => setNewNodeID(e.target.value)} />
-          <input className="input" placeholder="ssh target, e.g. root@nas.local" value={newNodeTarget} onChange={(e) => setNewNodeTarget(e.target.value)} />
-          <button className="btn btn-accent" disabled={!newNodeID || !newNodeTarget} onClick={addNode}><Plus size={16} /> Add</button>
+      {addOpen && <Overlay title="Add remote node" onClose={closeAdd}>
+        <div className="stack-form">
+          <label className="stack-field"><span>Node ID</span><input className="input" placeholder="e.g. nas" value={newNodeID} onChange={(e) => setNewNodeID(e.target.value)} /></label>
+          <label className="stack-field"><span>SSH target</span><input className="input" placeholder="e.g. root@nas.local" value={newNodeTarget} onChange={(e) => setNewNodeTarget(e.target.value)} /></label>
+          <button className="btn btn-accent" disabled={!newNodeID || !newNodeTarget} onClick={addNode}><Plus size={16} /> Add node</button>
         </div>
-      </Panel>}
+      </Overlay>}
       <Panel title="Nodes" icon={Network}>
         <div className="filterbar node-filterbar"><label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search nodes..." /></label></div>
         {loading ? <p className="muted">Loading nodes...</p> : filteredNodes.length ? filteredNodes.map((node) => <NodeRow key={node.id} node={node} editable={auth.role === "admin" && !auth.readOnly} onChanged={load} />) : <p className="muted">No matching nodes.</p>}
@@ -1616,6 +1622,7 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
   const api = useApi();
   const { toast } = useApiContext();
   const [labelsOpen, setLabelsOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState(node.labels?.join(", ") || "");
   const scopeText = node.scopes.map((s) => s.system ? `${s.label} (rootful)` : `${s.label} (${s.user || "user"} rootless)`).join(", ");
   const rootful = node.rootful || { units: 0, running: 0, failed: 0, unknown: 0 };
@@ -1643,28 +1650,61 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
   }
   return (
     <div className="history-row node-row">
-      <div className="node-id-block">
-        <div><strong>{node.local ? "local" : node.id}</strong>{node.metrics?.hostname && node.metrics.hostname !== node.id && <span className="muted"> · {node.metrics.hostname}</span>}</div>
-        <div className="muted node-meta">{[node.metrics?.kernel, node.metrics?.cores != null ? `${node.metrics.cores} cores` : null, node.metrics?.memTotalKb ? `${fmtBytes(node.metrics.memTotalKb * 1024)} RAM` : null].filter(Boolean).join(" · ") || scopeText || "no scopes"}</div>
-        {!!node.labels?.length && <div>{node.labels.map((label) => <span className="badge badge-user" key={label}>{label}</span>)}</div>}
-        {node.errors?.length ? <div className="warn-text">{node.errors.join("; ")}</div> : null}
+      <div className="node-click" onClick={() => setDetailOpen(true)}>
+        <div className="node-id-block">
+          <div><strong>{node.local ? "local" : node.id}</strong>{node.metrics?.hostname && node.metrics.hostname !== node.id && <span className="muted"> · {node.metrics.hostname}</span>}</div>
+          <div className="muted node-meta">{[node.metrics?.kernel, node.metrics?.cores != null ? `${node.metrics.cores} cores` : null, node.metrics?.memTotalKb ? `${fmtBytes(node.metrics.memTotalKb * 1024)} RAM` : null].filter(Boolean).join(" · ") || scopeText || "no scopes"}</div>
+          {!!node.labels?.length && <div>{node.labels.map((label) => <span className="badge badge-user" key={label}>{label}</span>)}</div>}
+          {node.errors?.length ? <div className="warn-text">{node.errors.join("; ")}</div> : null}
+        </div>
+        <span className="grow" />
+        {node.metrics?.cpuPct != null && node.metrics.cpuPct >= 0 && <span className="badge">{node.metrics.cpuPct}% cpu</span>}
+        {memPct != null && <span className="badge">{memPct}% mem</span>}
+        {node.metrics?.load1 != null && <span className="badge">load {node.metrics.load1.toFixed(2)}</span>}
+        {rootful.units > 0 && <span className={`badge ${rootful.failed ? "badge-failed" : "badge-running"}`} title="rootful: running / total"><Shield size={12} /> {rootful.running}/{rootful.units}</span>}
+        {rootless.units > 0 && <span className={`badge ${rootless.failed ? "badge-failed" : "badge-running"}`} title="rootless: running / total"><UserRound size={12} /> {rootless.running}/{rootless.units}</span>}
+        {node.failed > 0 && <span className="badge badge-failed">{node.failed} failed</span>}
       </div>
-      <span className="grow" />
-      {node.metrics?.cpuPct != null && node.metrics.cpuPct >= 0 && <span className="badge">{node.metrics.cpuPct}% cpu</span>}
-      {memPct != null && <span className="badge">{memPct}% mem</span>}
-      {node.metrics?.load1 != null && <span className="badge">load {node.metrics.load1.toFixed(2)}</span>}
-      {rootful.units > 0 && <span className={`badge ${rootful.failed ? "badge-failed" : "badge-running"}`} title="rootful: running / total"><Shield size={12} /> {rootful.running}/{rootful.units}</span>}
-      {rootless.units > 0 && <span className={`badge ${rootless.failed ? "badge-failed" : "badge-running"}`} title="rootless: running / total"><UserRound size={12} /> {rootless.running}/{rootless.units}</span>}
-      {node.failed > 0 && <span className="badge badge-failed">{node.failed} failed</span>}
-      {editable && <button className="btn btn-sm" onClick={() => { setLabelDraft(node.labels?.join(", ") || ""); setLabelsOpen(true); }}><SquarePen size={14} /> labels</button>}
-      {editable && !node.local && <button className="btn btn-sm btn-danger" onClick={removeNode}><Trash2 size={14} /> remove</button>}
+      {editable && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setLabelDraft(node.labels?.join(", ") || ""); setLabelsOpen(true); }}><SquarePen size={14} /> labels</button>}
+      {editable && !node.local && <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); removeNode(); }}><Trash2 size={14} /> remove</button>}
       {labelsOpen && <Overlay title={`Labels for ${node.local ? "local" : node.id}`} onClose={() => setLabelsOpen(false)}>
         <div className="stack-form">
           <input className="input" value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)} placeholder="prod, gpu" />
           <button className="btn btn-accent" onClick={saveLabels}><Save size={16} /> Save labels</button>
         </div>
       </Overlay>}
+      {detailOpen && <NodeDetail node={node} onClose={() => setDetailOpen(false)} />}
     </div>
+  );
+}
+
+function NodeDetail({ node, onClose }: { node: ManagedNode; onClose: () => void }) {
+  const m = node.metrics;
+  const memPct = m?.memTotalKb ? Math.round(100 * (1 - (m.memAvailKb || 0) / m.memTotalKb)) : null;
+  const scopeLine = (c?: NodeCounts) => c ? `${c.running}/${c.units} running${c.failed ? `, ${c.failed} failed` : ""}` : null;
+  return (
+    <Overlay title={node.local ? "local host" : node.id} onClose={onClose}>
+      <div className="tiles">
+        {m?.cpuPct != null && m.cpuPct >= 0 && <MetricTile label="cpu" value={`${m.cpuPct}%`} tone="dim" />}
+        {memPct != null && <MetricTile label="mem" value={`${memPct}%`} tone="dim" />}
+        {m?.load1 != null && <MetricTile label="load" value={m.load1.toFixed(2)} tone="dim" />}
+        <MetricTile label="units" value={node.units} tone={node.units ? "ok" : "dim"} />
+        {node.failed > 0 && <MetricTile label="failed" value={node.failed} tone="bad" />}
+      </div>
+      <dl className="kv">
+        {m?.hostname && <><dt>hostname</dt><dd>{m.hostname}</dd></>}
+        {m?.kernel && <><dt>kernel</dt><dd>{m.kernel}</dd></>}
+        {m?.cores != null && <><dt>cores</dt><dd>{m.cores}</dd></>}
+        {m?.memTotalKb ? <><dt>memory</dt><dd>{fmtBytes(m.memTotalKb * 1024)}</dd></> : null}
+        {node.address && <><dt>address</dt><dd>{node.address}</dd></>}
+        <dt>scopes</dt><dd>{node.scopes.map((s) => s.system ? `${s.label} (rootful)` : `${s.label} (${s.user || "user"} rootless)`).join(", ") || "none"}</dd>
+        {scopeLine(node.rootful) && <><dt>rootful</dt><dd>{scopeLine(node.rootful)}</dd></>}
+        {scopeLine(node.rootless) && <><dt>rootless</dt><dd>{scopeLine(node.rootless)}</dd></>}
+        {!!node.labels?.length && <><dt>labels</dt><dd>{node.labels.join(", ")}</dd></>}
+        {!!node.unitDirs?.length && <><dt>unit dirs</dt><dd>{node.unitDirs.join(", ")}</dd></>}
+      </dl>
+      {node.errors?.length ? <p className="warn-text">{node.errors.join("; ")}</p> : null}
+    </Overlay>
   );
 }
 
@@ -1922,7 +1962,7 @@ function ImportView() {
   const selectedMode = IMPORT_MODES[kind];
 
   return (
-    <Page title="Import" kicker="Convert existing definitions into Quadlets" back={<BackButton />}>
+    <Page title="Import" kicker="Convert existing definitions into Quadlets" back={<BackButton className="hide-wide" />}>
       <Panel title="Source" icon={Import}>
         {kind === "container" && <p className="banner">Local host only. Container import uses this Rookery host's Podman socket.</p>}
         <div className="import-layout">
@@ -2766,8 +2806,8 @@ function Page({ title, kicker, subtitle, action, back, children }: { title: stri
   );
 }
 
-function BackButton() {
-  return <Link className="btn icon-only" to="/"><ChevronLeft size={18} /></Link>;
+function BackButton({ className }: { className?: string }) {
+  return <Link className={`btn icon-only ${className || ""}`} to="/"><ChevronLeft size={18} /></Link>;
 }
 
 function Panel({ title, icon: Icon, action, children }: { title: string; icon: React.ElementType; action?: React.ReactNode; children: React.ReactNode }) {
