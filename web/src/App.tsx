@@ -385,7 +385,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
       </nav>
       {newUnitOpen && (
         <Overlay title={`New ${currentView?.singular || "unit"}`} onClose={() => setNewUnitOpen(false)}>
-          <NewUnitForm initialKind={currentView?.singular} onCreated={() => setNewUnitOpen(false)} />
+          <CreateFlow kind={currentView?.singular || "container"} onCreated={() => setNewUnitOpen(false)} />
         </Overlay>
       )}
     </div>
@@ -1947,6 +1947,127 @@ function PolicyRow({ finding, editable, onChanged }: { finding: PolicyFinding; e
           <button className="btn btn-accent" onClick={waive}><Check size={16} /> Waive</button>
         </div>
       </Overlay>}
+    </div>
+  );
+}
+
+// buildQuadlet renders a minimal, valid Quadlet unit from wizard fields — shown
+// live as the user types, so the wizard doubles as a way to learn the syntax.
+function buildQuadlet(kind: string, f: { name: string; image: string; driver: string; subnet: string; ports: string[]; volumes: string[]; env: string[] }): string {
+  const L: string[] = [];
+  const list = (arr: string[]) => arr.map((x) => x.trim()).filter(Boolean);
+  if (kind === "container") {
+    L.push("[Unit]", `Description=${f.name.trim() || "container"}`, "", "[Container]");
+    if (f.image.trim()) L.push(`Image=${f.image.trim()}`);
+    list(f.ports).forEach((p) => L.push(`PublishPort=${p}`));
+    list(f.volumes).forEach((v) => L.push(`Volume=${v}`));
+    list(f.env).forEach((e) => L.push(`Environment=${e}`));
+    L.push("", "[Service]", "Restart=always", "", "[Install]", "WantedBy=default.target");
+  } else if (kind === "pod") {
+    L.push("[Pod]");
+    list(f.ports).forEach((p) => L.push(`PublishPort=${p}`));
+    L.push("", "[Install]", "WantedBy=default.target");
+  } else if (kind === "network") {
+    L.push("[Network]");
+    if (f.driver.trim()) L.push(`Driver=${f.driver.trim()}`);
+    if (f.subnet.trim()) L.push(`Subnet=${f.subnet.trim()}`);
+  } else if (kind === "volume") {
+    L.push("[Volume]");
+    if (f.driver.trim()) L.push(`Driver=${f.driver.trim()}`);
+  }
+  return L.join("\n") + "\n";
+}
+
+function WizardListInput({ label, placeholder, values, onChange }: { label: string; placeholder: string; values: string[]; onChange: (v: string[]) => void }) {
+  return (
+    <div className="wizard-field">
+      <label>{label}</label>
+      {values.map((v, i) => (
+        <div className="wizard-listrow" key={i}>
+          <input className="input" placeholder={placeholder} value={v} onChange={(e) => onChange(values.map((x, j) => (j === i ? e.target.value : x)))} />
+          <button type="button" className="btn icon-only" title="Remove" onClick={() => onChange(values.filter((_, j) => j !== i))}><X size={16} /></button>
+        </div>
+      ))}
+      <button type="button" className="btn btn-sm" onClick={() => onChange([...values, ""])}><Plus size={14} /> add {label.toLowerCase()}</button>
+    </div>
+  );
+}
+
+// Wizard: guided per-type create with a live Quadlet preview. Novices fill
+// fields; advanced users can flip to the raw editor and keep what's generated.
+function Wizard({ kind, onCreated }: { kind: string; onCreated?: () => void }) {
+  const api = useApi();
+  const { toast } = useApiContext();
+  const navigate = useNavigate();
+  const [scopes, setScopes] = useState(["system"]);
+  const [scope, setScope] = useState("system");
+  const [name, setName] = useState("");
+  const [image, setImage] = useState("");
+  const [driver, setDriver] = useState(kind === "network" ? "bridge" : "local");
+  const [subnet, setSubnet] = useState("");
+  const [ports, setPorts] = useState<string[]>([]);
+  const [volumes, setVolumes] = useState<string[]>([]);
+  const [env, setEnv] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api<HostInfo>("/api/host").then(({ body }) => { const s = body.scopes || ["system"]; setScopes(s); setScope(s[0] || "system"); }).catch(() => undefined);
+  }, [api]);
+  const content = buildQuadlet(kind, { name, image, driver, subnet, ports, volumes, env });
+  async function create() {
+    if (!name.trim()) { toast("name is required", true); return; }
+    if (kind === "container" && !image.trim()) { toast("image is required", true); return; }
+    setBusy(true);
+    const unit = `${name.trim()}.${kind}`;
+    try {
+      const { status } = await api(`/api/units/${encodeURIComponent(scope)}/${encodeURIComponent(unit)}`, { method: "PUT", body: JSON.stringify({ content }) });
+      if (status === 422) { toast("rejected by validator", true); return; }
+      toast(`created ${unit}`);
+      onCreated?.();
+      navigate(`/unit/${encodeURIComponent(scope)}/${encodeURIComponent(unit)}`);
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="wizard">
+      <div className="wizard-form">
+        <div className="wizard-field"><label>Server / scope</label><select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select></div>
+        <div className="wizard-field"><label>Name</label><input className="input" placeholder={`my-${kind}`} value={name} onChange={(e) => setName(e.target.value)} /></div>
+        {kind === "container" && <div className="wizard-field"><label>Image</label><input className="input" placeholder="docker.io/library/nginx:latest" value={image} onChange={(e) => setImage(e.target.value)} /></div>}
+        {kind === "network" && <>
+          <div className="wizard-field"><label>Driver</label><select className="input" value={driver} onChange={(e) => setDriver(e.target.value)}><option>bridge</option><option>macvlan</option><option>ipvlan</option></select></div>
+          <div className="wizard-field"><label>Subnet <span className="muted">(optional — blank = auto)</span></label><input className="input" placeholder="10.89.0.0/24" value={subnet} onChange={(e) => setSubnet(e.target.value)} /></div>
+        </>}
+        {kind === "volume" && <div className="wizard-field"><label>Driver</label><input className="input" value={driver} onChange={(e) => setDriver(e.target.value)} /></div>}
+        {(kind === "container" || kind === "pod") && <WizardListInput label="Ports" placeholder="8080:80" values={ports} onChange={setPorts} />}
+        {kind === "container" && <WizardListInput label="Volumes" placeholder="/host:/data or myvol:/data" values={volumes} onChange={setVolumes} />}
+        {kind === "container" && <WizardListInput label="Environment" placeholder="KEY=value" values={env} onChange={setEnv} />}
+        <button className="btn btn-accent" disabled={busy} onClick={create}>{busy ? <RefreshCw className="spin" size={16} /> : <Plus size={16} />} Create {kind}</button>
+      </div>
+      <div className="wizard-preview">
+        <div className="wizard-preview-head">{name.trim() || "unit"}.{kind}</div>
+        <pre>{content}</pre>
+      </div>
+    </div>
+  );
+}
+
+// CreateFlow is the "+ Add" body: a guided wizard by default, with a flip to
+// the raw editor, and (for containers) a shortcut to the docker-run importer.
+function CreateFlow({ kind, onCreated }: { kind: string; onCreated?: () => void }) {
+  const [mode, setMode] = useState<"wizard" | "editor">("wizard");
+  return (
+    <div className="create-flow">
+      <div className="create-mode">
+        <div className="segmented">
+          <button className={mode === "wizard" ? "active" : ""} onClick={() => setMode("wizard")}>Guided wizard</button>
+          <button className={mode === "editor" ? "active" : ""} onClick={() => setMode("editor")}>Editor</button>
+        </div>
+        {kind === "container" && <Link className="create-import-link" to="/import" onClick={() => onCreated?.()}>or import from docker run / compose →</Link>}
+      </div>
+      {mode === "wizard" ? <Wizard kind={kind} onCreated={onCreated} /> : <NewUnitForm initialKind={kind} onCreated={onCreated} />}
     </div>
   );
 }
