@@ -15,9 +15,18 @@ import (
 
 // fakePodman serves canned digests and records pulls.
 type fakePodman struct {
-	digests map[string][]string
-	pulled  []string
-	pullErr error
+	digests  map[string][]string
+	pulled   []string
+	pullErr  error
+	networks []podman.NetworkSummary
+	volumes  []podman.VolumeSummary
+}
+
+func (f *fakePodman) Networks(context.Context) ([]podman.NetworkSummary, error) {
+	return f.networks, nil
+}
+func (f *fakePodman) Volumes(context.Context) ([]podman.VolumeSummary, error) {
+	return f.volumes, nil
 }
 
 func (f *fakePodman) Info(context.Context) (*podman.Info, error) {

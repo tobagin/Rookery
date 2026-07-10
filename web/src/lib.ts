@@ -38,6 +38,18 @@ export interface Unit {
   readOnly?: boolean;
 }
 
+// Resource is a live podman network or volume (from /api/resources), tagged
+// whether a Quadlet unit manages it.
+export interface Resource {
+  kind: string; // "network" | "volume"
+  name: string;
+  scope: string;
+  node?: string;
+  driver?: string;
+  detail?: string;
+  managed: boolean;
+}
+
 export interface HostInfo {
   metrics?: {
     hostname?: string;

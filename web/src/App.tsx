@@ -70,6 +70,7 @@ import {
   NodeCounts,
   NodeGroup,
   PolicyFinding,
+  Resource,
   lineDiff,
   stateClass,
   stateLabel,
@@ -242,7 +243,7 @@ export function App() {
         <Shell host={host} reloadAuth={loadAuth} theme={theme} setTheme={setTheme}>
           <Routes>
             <Route path="/" element={<Dashboard host={host} />} />
-            {RESOURCE_VIEWS.filter((v) => v.path !== "/images").map((v) => <Route key={v.path} path={v.path} element={<UnitsPage view={v} />} />)}
+            {RESOURCE_VIEWS.filter((v) => v.path !== "/images").map((v) => <Route key={v.path} path={v.path} element={v.runnable ? <UnitsPage view={v} /> : <ResourceList view={v} />} />)}
             <Route path="/images" element={<ImagesView view={RESOURCE_VIEWS.find((v) => v.path === "/images")!} />} />
             <Route path="/updates" element={<Navigate to="/images" replace />} />
             <Route path="/gpus" element={<Navigate to="/resources" replace />} />
@@ -295,15 +296,19 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   // glance (and a "0" invites the first create). ponytail: reuses the units
   // poll; lift to a shared context only if the double-fetch shows up as load.
   const { units: navUnits } = useUnits(true);
+  const { resources: navResources } = useResources(true);
   const [nodeCount, setNodeCount] = useState<number>();
   useEffect(() => { api<{ nodes?: unknown[] }>("/api/nodes").then(({ body }) => setNodeCount(body.nodes?.length)).catch(() => undefined); }, [api]);
   const navCounts = useMemo(() => {
     const c: Record<string, number> = {};
     RESOURCE_VIEWS.forEach((v) => { c[v.path] = 0; });
-    navUnits.forEach((u) => { const v = viewForKind(u.kind); c[v] = (c[v] || 0) + 1; });
+    // runnable types + images come from Quadlet units; networks/volumes come
+    // from live podman resources (which is why they were showing 0 as units).
+    navUnits.forEach((u) => { const v = viewForKind(u.kind); if (v === "/containers" || v === "/pods" || v === "/images") c[v] = (c[v] || 0) + 1; });
+    navResources.forEach((r) => { const v = viewForKind(r.kind); c[v] = (c[v] || 0) + 1; });
     if (nodeCount !== undefined) c["/fleet"] = nodeCount;
     return c;
-  }, [navUnits, nodeCount]);
+  }, [navUnits, navResources, nodeCount]);
 
   useEffect(() => {
     localStorage.setItem("rookery-sidebar", sidebarCollapsed ? "collapsed" : "expanded");
@@ -656,6 +661,33 @@ function useUnits(poll = false) {
   return { units, scopeErrors, error, loading, reload: load };
 }
 
+function useResources(poll = false) {
+  const api = useApi();
+  const [resources, setResources] = useState<Resource[]>([]);
+  const [scopeErrors, setScopeErrors] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    try {
+      const { body } = await api<{ resources?: Resource[]; scopeErrors?: Record<string, string> }>("/api/resources");
+      setResources(body.resources || []);
+      setScopeErrors(body.scopeErrors || {});
+      setError("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [api]);
+  useEffect(() => {
+    load();
+    if (!poll) return;
+    const id = window.setInterval(() => { if (!document.hidden) load(); }, 8000);
+    return () => window.clearInterval(id);
+  }, [load, poll]);
+  return { resources, scopeErrors, error, loading, reload: load };
+}
+
 function useDirtyGuard(dirty: boolean, message = "Discard unsaved changes?") {
   useEffect(() => {
     if (!dirty) return;
@@ -978,6 +1010,58 @@ function UnitsPage({ view }: { view: ResourceView }) {
         <EmptyState title={`No matching ${view.label.toLowerCase()}`} text="Adjust the filters above." />
       )}
     </Page>
+  );
+}
+
+// ResourceList shows live podman networks/volumes (from /api/resources), each
+// tagged managed (Quadlet-backed) or unmanaged (created imperatively) — so the
+// pages reflect what podman actually has, not just the rare .network/.volume
+// units. Networks/volumes have no run state, so there's no status filter.
+function ResourceList({ view }: { view: ResourceView }) {
+  const { resources, scopeErrors, error, loading } = useResources(true);
+  const { auth } = useApiContext();
+  const [q, setQ] = useState("");
+  const ofType = resources.filter((res) => res.kind === view.singular);
+  const needle = q.trim().toLowerCase();
+  const filtered = ofType.filter((res) => !needle || `${res.name} ${res.scope} ${res.driver || ""} ${res.detail || ""}`.toLowerCase().includes(needle)).sort((a, b) => a.name.localeCompare(b.name));
+  const managed = ofType.filter((r) => r.managed).length;
+  const addBtn = !auth.readOnly && <Link className="btn btn-accent" to={`/new?kind=${view.singular}`}><Plus size={16} /> Add {view.singular}</Link>;
+  return (
+    <Page title={view.label} subtitle={view.blurb}>
+      <ScopeErrors errors={scopeErrors} />
+      {error && <p className="banner banner-error">{error}</p>}
+      <div className="tiles">
+        <MetricTile label={view.label.toLowerCase()} value={ofType.length} tone="dim" />
+        <MetricTile label="managed" value={managed} tone={managed ? "ok" : "dim"} />
+        <MetricTile label="unmanaged" value={ofType.length - managed} tone={ofType.length - managed ? "warn" : "dim"} />
+      </div>
+      <div className="filterbar units-filterbar">
+        <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter ${view.label.toLowerCase()} by name, driver...`} /></label>
+      </div>
+      {loading ? <p className="muted">Loading {view.label.toLowerCase()}...</p> : filtered.length ? (
+        <div className="unit-list">{filtered.map((res) => <ResourceRow key={`${res.scope}/${res.kind}/${res.name}`} res={res} />)}</div>
+      ) : ofType.length === 0 ? (
+        <EmptyState icon={view.icon} title={`No ${view.label.toLowerCase()} yet`} text={view.blurb} action={addBtn} />
+      ) : (
+        <EmptyState title={`No matching ${view.label.toLowerCase()}`} text="Adjust the filter above." />
+      )}
+    </Page>
+  );
+}
+
+function ResourceRow({ res }: { res: Resource }) {
+  return (
+    <div className="unit-row resource-row">
+      <span className="state-icon running" title={res.kind}><KindIcon kind={res.kind} size={17} /></span>
+      <span className="unit-main">
+        <span className="unit-title">{res.name}</span>
+        <span className="unit-sub">{[res.driver, res.detail].filter(Boolean).join(" · ") || res.scope}</span>
+      </span>
+      <span className="badges">
+        <span className={`badge ${res.managed ? "badge-running" : "badge-warn"}`}>{res.managed ? "managed" : "unmanaged"}</span>
+        {res.node && <RowChip icon={Server} color={nodeColor(res.node)} label={`node ${res.node}`}>node <b>{res.node}</b> · {res.scope}</RowChip>}
+      </span>
+    </div>
   );
 }
 

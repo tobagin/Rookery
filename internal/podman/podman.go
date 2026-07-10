@@ -297,6 +297,53 @@ func (c *Client) StaleImages(ctx context.Context) (count int, size int64, err er
 	return len(raw), size, nil
 }
 
+// NetworkSummary is one row of `podman network ls`, with the first subnet for
+// display.
+type NetworkSummary struct {
+	Name    string `json:"name"`
+	Driver  string `json:"driver"`
+	Subnets []struct {
+		Subnet string `json:"subnet"`
+	} `json:"subnets"`
+	Labels map[string]string `json:"labels"`
+}
+
+// Networks lists the podman networks in this socket's scope.
+func (c *Client) Networks(ctx context.Context) ([]NetworkSummary, error) {
+	resp, err := c.get(ctx, "/networks/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out []NetworkSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// VolumeSummary is one row of `podman volume ls`.
+type VolumeSummary struct {
+	Name       string            `json:"Name"`
+	Driver     string            `json:"Driver"`
+	Mountpoint string            `json:"Mountpoint"`
+	Labels     map[string]string `json:"Labels"`
+}
+
+// Volumes lists the podman volumes in this socket's scope.
+func (c *Client) Volumes(ctx context.Context) ([]VolumeSummary, error) {
+	resp, err := c.get(ctx, "/volumes/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out []VolumeSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PruneImages removes dangling images and returns the bytes reclaimed.
 func (c *Client) PruneImages(ctx context.Context) (int64, error) {
 	u := "http://d/v5.0.0/libpod/images/prune?filters=" + url.QueryEscape(`{"dangling":["true"]}`)
