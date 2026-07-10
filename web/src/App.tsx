@@ -240,11 +240,12 @@ export function App() {
         <Shell host={host} reloadAuth={loadAuth} theme={theme} setTheme={setTheme}>
           <Routes>
             <Route path="/" element={<Dashboard host={host} />} />
-            {RESOURCE_VIEWS.map((v) => <Route key={v.path} path={v.path} element={<UnitsPage view={v} />} />)}
+            {RESOURCE_VIEWS.filter((v) => v.path !== "/images").map((v) => <Route key={v.path} path={v.path} element={<UnitsPage view={v} />} />)}
+            <Route path="/images" element={<ImagesView view={RESOURCE_VIEWS.find((v) => v.path === "/images")!} />} />
+            <Route path="/updates" element={<Navigate to="/images" replace />} />
+            <Route path="/gpus" element={<Navigate to="/resources" replace />} />
             <Route path="/units" element={<Navigate to="/containers" replace />} />
             <Route path="/failed" element={<Navigate to="/containers?status=failed" replace />} />
-            <Route path="/gpus" element={<Navigate to="/resources" replace />} />
-            <Route path="/updates" element={<Navigate to="/images" replace />} />
             <Route path="/resources" element={<ResourcesView />} />
             <Route path="/fleet" element={<FleetView />} />
             <Route path="/policies" element={<PoliciesView />} />
@@ -1983,9 +1984,14 @@ function ImportResult({ unit, scope, sourceContainer = "" }: { unit: { name: str
   );
 }
 
-function UpdatesView() {
+// ImagesView owns /images: the image/build units plus registry-drift checks and
+// stale-image cleanup (the former standalone Updates page, folded in — updates
+// are "mostly an image thing").
+function ImagesView({ view }: { view: ResourceView }) {
   const api = useApi();
-  const { toast } = useApiContext();
+  const { auth, toast } = useApiContext();
+  const { units, reload: reloadUnits } = useUnits(true);
+  const imageUnits = units.filter((u) => viewForKind(u.kind) === "/images");
   const [params, setParams] = useSearchParams();
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const [summary, setSummary] = useState("");
@@ -2079,8 +2085,11 @@ function UpdatesView() {
   useEffect(() => { check(false); }, []);
 
   return (
-    <Page title="Updates" kicker="Registry drift and stale image cleanup">
+    <Page title={view.label} kicker="Image units, registry drift, and stale cleanup" action={!auth.readOnly && <Link className="btn btn-accent" to="/new?kind=image"><Plus size={16} /> Add image</Link>}>
       {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
+      <Panel title="Image units" icon={Layers}>
+        {imageUnits.length ? imageUnits.map((u) => <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={reloadUnits} compact />) : <p className="muted">No .image or .build units yet — add one to pre-pull or build an image.</p>}
+      </Panel>
       <p className="banner">Image prune and container import are local-host operations; remote hosts still support update checks and pulls where configured.</p>
       <div className="tiles">
         <MetricTile label="updates available" value={available.length} tone={available.length ? "warn" : "dim"} />
