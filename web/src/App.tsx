@@ -1050,7 +1050,7 @@ function ResourceList({ view }: { view: ResourceView }) {
   );
 }
 
-function ResourceRow({ res, onChanged }: { res: Resource; onChanged?: () => void }) {
+function ResourceRow({ res, onChanged, updateAvailable }: { res: Resource; onChanged?: () => void; updateAvailable?: boolean }) {
   const { auth, toast } = useApiContext();
   const api = useApi();
   const [busy, setBusy] = useState(false);
@@ -1077,7 +1077,9 @@ function ResourceRow({ res, onChanged }: { res: Resource; onChanged?: () => void
         <span className="unit-sub">{[res.driver, res.detail].filter(Boolean).join(" · ") || res.scope}</span>
       </span>
       <span className="badges">
-        <span className={`badge ${res.managed ? "badge-running" : "badge-warn"}`}>{res.managed ? "managed" : "unmanaged"}</span>
+        {updateAvailable && <RowChip icon={Download} color="var(--warn)" label="update available">update available — pull to refresh</RowChip>}
+        {/* only the exception (Quadlet-backed) is flagged; imperatively-created is the norm */}
+        {res.managed && <span className="badge badge-running" title="defined by a Quadlet unit">managed</span>}
         {res.node && <RowChip icon={Server} color={nodeColor(res.node)} label={`node ${res.node}`}>node <b>{res.node}</b> · {res.scope}</RowChip>}
       </span>
       {!auth.readOnly && !res.managed && (
@@ -2395,7 +2397,7 @@ function ImagesView({ view }: { view: ResourceView }) {
     <Page title={view.label} subtitle="Image units, updates, and cleanup">
       {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
       <Panel title={`Images in store (${storeImages.length})`} icon={Layers}>
-        {storeImages.length ? storeImages.map((im, i) => <ResourceRow key={`${im.node || ""}/${im.scope}/${im.name}/${i}`} res={im} onChanged={reloadResources} />) : <p className="muted">No tagged images in the store yet.</p>}
+        {storeImages.length ? storeImages.map((im, i) => <ResourceRow key={`${im.node || ""}/${im.scope}/${im.name}/${i}`} res={im} onChanged={reloadResources} updateAvailable={updates.some((u) => u.updateAvailable && u.image === im.name)} />) : <p className="muted">No tagged images in the store yet.</p>}
       </Panel>
       <p className="banner">Image prune and container import are local-host operations; remote hosts still support update checks and pulls where configured.</p>
       <div className="tiles">
