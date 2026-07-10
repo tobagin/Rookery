@@ -1058,6 +1058,7 @@ function ResourceRow({ res, onChanged, updateAvailable }: { res: Resource; onCha
   const { auth, toast } = useApiContext();
   const api = useApi();
   const [busy, setBusy] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   async function del(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -1075,23 +1076,53 @@ function ResourceRow({ res, onChanged, updateAvailable }: { res: Resource; onCha
   }
   return (
     <div className="unit-row resource-row">
-      <span className="state-icon running" title={res.kind}><KindIcon kind={res.kind} size={17} /></span>
-      <span className="unit-main">
-        <span className="unit-title">{res.name}</span>
-        <span className="unit-sub">{[res.driver, res.detail].filter(Boolean).join(" · ") || res.scope}</span>
-      </span>
-      <span className="badges">
-        {updateAvailable && <RowChip icon={Download} color="var(--warn)" label="update available">update available — pull to refresh</RowChip>}
-        {/* only the exception (Quadlet-backed) is flagged; imperatively-created is the norm */}
-        {res.managed && <span className="badge badge-running" title="defined by a Quadlet unit">managed</span>}
-        {res.node && <RowChip icon={Server} color={nodeColor(res.node)} label={`node ${res.node}`}>node <b>{res.node}</b> · {res.scope}</RowChip>}
-      </span>
+      <div className="resource-click" onClick={() => setDetailOpen(true)}>
+        <span className="state-icon running" title={res.kind}><KindIcon kind={res.kind} size={17} /></span>
+        <span className="unit-main">
+          <span className="unit-title">{res.name}</span>
+          <span className="unit-sub">{[res.driver, res.detail].filter(Boolean).join(" · ") || res.scope}</span>
+        </span>
+        <span className="badges">
+          {updateAvailable && <RowChip icon={Download} color="var(--warn)" label="update available">update available — pull to refresh</RowChip>}
+          {/* only the exception (Quadlet-backed) is flagged; imperatively-created is the norm */}
+          {res.managed && <span className="badge badge-running" title="defined by a Quadlet unit">managed</span>}
+          {res.node && <RowChip icon={Server} color={nodeColor(res.node)} label={`node ${res.node}`}>node <b>{res.node}</b> · {res.scope}</RowChip>}
+        </span>
+      </div>
       {!auth.readOnly && !res.managed && (
         <span className="row-actions">
           <button className="btn icon-only" disabled={busy} title={`Delete ${res.kind}`} onClick={del}>{busy ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}</button>
         </span>
       )}
+      {detailOpen && <ResourceDetail res={res} onClose={() => setDetailOpen(false)} />}
     </div>
+  );
+}
+
+function ResourceDetail({ res, onClose }: { res: Resource; onClose: () => void }) {
+  const api = useApi();
+  const [detail, setDetail] = useState<{ fields: { key: string; value: string }[]; usedBy: string[] } | null>(null);
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    if (res.scope !== "system") { setNote("Detailed inspect is available on the control-plane host for now."); return; }
+    api<{ fields: { key: string; value: string }[]; usedBy: string[] }>(`/api/resources/inspect?scope=${encodeURIComponent(res.scope)}&kind=${encodeURIComponent(res.kind)}&name=${encodeURIComponent(res.name)}`)
+      .then(({ body }) => setDetail(body)).catch((e) => setNote((e as Error).message));
+  }, [api, res]);
+  return (
+    <Overlay title={res.name} onClose={onClose}>
+      <dl className="kv">
+        <dt>kind</dt><dd>{res.kind}</dd>
+        <dt>scope</dt><dd>{res.scope}{res.node ? ` · ${res.node}` : ""}</dd>
+        {!detail && res.driver && <><dt>driver</dt><dd>{res.driver}</dd></>}
+        {!detail && res.detail && <><dt>detail</dt><dd>{res.detail}</dd></>}
+        <dt>managed</dt><dd>{res.managed ? "yes — defined by a Quadlet unit" : "no — created imperatively"}</dd>
+        {detail?.fields.map((f) => <React.Fragment key={f.key}><dt>{f.key}</dt><dd>{f.value}</dd></React.Fragment>)}
+      </dl>
+      {detail?.usedBy?.length ? (
+        <div className="resource-usedby"><h3>Used by</h3><div>{detail.usedBy.map((u) => <span className="badge badge-user" key={u}>{u}</span>)}</div></div>
+      ) : null}
+      {note && <p className="muted">{note}</p>}
+    </Overlay>
   );
 }
 

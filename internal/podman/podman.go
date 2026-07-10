@@ -365,6 +365,26 @@ func (c *Client) Images(ctx context.Context) ([]ImageSummary, error) {
 	return out, nil
 }
 
+// InspectNetwork/Volume/Image return the raw inspect JSON for the object; the
+// server extracts the display fields it needs (mirrors InspectContainer).
+func (c *Client) InspectNetwork(ctx context.Context, name string) ([]byte, error) {
+	return c.inspect(ctx, "/networks/"+name+"/json")
+}
+func (c *Client) InspectVolume(ctx context.Context, name string) ([]byte, error) {
+	return c.inspect(ctx, "/volumes/"+name+"/json")
+}
+func (c *Client) InspectImage(ctx context.Context, name string) ([]byte, error) {
+	return c.inspect(ctx, "/images/"+name+"/json")
+}
+func (c *Client) inspect(ctx context.Context, path string) ([]byte, error) {
+	resp, err := c.get(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
 func (c *Client) delete(ctx context.Context, path string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, "http://d/v5.0.0/libpod"+path, nil)
 	if err != nil {

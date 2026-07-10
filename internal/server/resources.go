@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -114,6 +115,132 @@ func (s *Server) appendLocalResources(r *http.Request, area Area, out []resource
 		}
 	}
 	return out
+}
+
+// resourceInspector is the inspect slice of the Podman client, asserted at runtime.
+type resourceInspector interface {
+	InspectNetwork(ctx context.Context, name string) ([]byte, error)
+	InspectVolume(ctx context.Context, name string) ([]byte, error)
+	InspectImage(ctx context.Context, name string) ([]byte, error)
+	Containers(ctx context.Context) ([]podman.ContainerSummary, error)
+}
+
+type resourceField struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// handleInspectResource returns display fields + "used by" for one resource.
+// ponytail: local rootful scope only (via s.pod); the overlay shows the list
+// fields for remote/rootless scopes until the agent grows an inspect endpoint.
+func (s *Server) handleInspectResource(w http.ResponseWriter, r *http.Request) {
+	scope, kind, name := r.URL.Query().Get("scope"), r.URL.Query().Get("kind"), r.URL.Query().Get("name")
+	if scope == "" || kind == "" || name == "" {
+		httpError(w, http.StatusBadRequest, "scope, kind, and name are required")
+		return
+	}
+	var area *Area
+	for _, a := range s.areasSnapshot() {
+		if a.Label == scope {
+			found := a
+			area = &found
+			break
+		}
+	}
+	if area == nil || area.ViaAgent() || area.Remote() || !area.Scope.IsSystem() {
+		httpError(w, http.StatusBadRequest, "detailed inspect is available on the control-plane host only")
+		return
+	}
+	ins, ok := s.pod.(resourceInspector)
+	if !ok || s.pod == nil {
+		httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
+		return
+	}
+	fields := []resourceField{}
+	usedBy := []string{}
+	add := func(m map[string]any, jsonKey, label string) {
+		if v, ok := m[jsonKey]; ok && v != nil && fmt.Sprint(v) != "" {
+			fields = append(fields, resourceField{label, fmt.Sprint(v)})
+		}
+	}
+	switch kind {
+	case "network":
+		raw, err := ins.InspectNetwork(r.Context(), name)
+		if err != nil {
+			httpError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		var n map[string]any
+		json.Unmarshal(raw, &n)
+		add(n, "driver", "driver")
+		add(n, "network_interface", "interface")
+		if subs, ok := n["subnets"].([]any); ok && len(subs) > 0 {
+			if m, ok := subs[0].(map[string]any); ok {
+				add(m, "subnet", "subnet")
+				add(m, "gateway", "gateway")
+			}
+		}
+		add(n, "internal", "internal")
+		add(n, "dns_enabled", "dns")
+		add(n, "ipv6_enabled", "ipv6")
+		if cs, ok := n["containers"].(map[string]any); ok {
+			for _, cv := range cs {
+				if m, ok := cv.(map[string]any); ok {
+					if nm, ok := m["name"].(string); ok {
+						usedBy = append(usedBy, nm)
+					}
+				}
+			}
+		}
+	case "volume":
+		raw, err := ins.InspectVolume(r.Context(), name)
+		if err != nil {
+			httpError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		var v map[string]any
+		json.Unmarshal(raw, &v)
+		add(v, "Driver", "driver")
+		add(v, "Mountpoint", "mountpoint")
+		add(v, "CreatedAt", "created")
+		if labels, ok := v["Labels"].(map[string]any); ok && len(labels) > 0 {
+			parts := make([]string, 0, len(labels))
+			for k, val := range labels {
+				parts = append(parts, fmt.Sprintf("%s=%v", k, val))
+			}
+			fields = append(fields, resourceField{"labels", strings.Join(parts, ", ")})
+		}
+	case "image":
+		raw, err := ins.InspectImage(r.Context(), name)
+		if err != nil {
+			httpError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		var im map[string]any
+		json.Unmarshal(raw, &im)
+		if id, ok := im["Id"].(string); ok {
+			fields = append(fields, resourceField{"id", strings.TrimPrefix(id, "sha256:")[:min(12, len(strings.TrimPrefix(id, "sha256:")))]})
+		}
+		add(im, "Created", "created")
+		if arch, ok := im["Architecture"].(string); ok {
+			os, _ := im["Os"].(string)
+			fields = append(fields, resourceField{"platform", strings.TrimRight(os+"/"+arch, "/")})
+		}
+		if size, ok := im["Size"].(float64); ok {
+			fields = append(fields, resourceField{"size", humanBytes(int64(size))})
+		}
+		if conts, err := ins.Containers(r.Context()); err == nil {
+			for _, c := range conts {
+				if c.Image == name {
+					usedBy = append(usedBy, c.Name())
+				}
+			}
+		}
+	default:
+		httpError(w, http.StatusBadRequest, "unknown resource kind")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"fields": fields, "usedBy": usedBy})
 }
 
 // resourceMutator is the delete slice of the Podman client, asserted at runtime.

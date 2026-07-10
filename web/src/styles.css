@@ -209,6 +209,11 @@ h1, .kicker, h2, .tile-value, .tile-label, .unit-title, .nav-group-label, .chip,
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; color: var(--text); word-break: break-word; }
 .node-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; vertical-align: middle; }
+.resource-row { cursor: pointer; }
+.resource-click { display: contents; }
+.resource-usedby { margin-top: 14px; }
+.resource-usedby h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+.resource-usedby > div { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* Create flow: guided wizard with a live Quadlet preview. */
 .create-flow { display: flex; flex-direction: column; gap: 14px; }
