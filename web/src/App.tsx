@@ -11,11 +11,11 @@ import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutt
 import {
   Activity,
   AlertTriangle,
-  Box,
   Boxes,
   Check,
   ChevronLeft,
   CircleStop,
+  Container,
   Cpu,
   Download,
   Eye,
@@ -26,6 +26,7 @@ import {
   Home,
   Import,
   KeyRound,
+  Layers,
   ListFilter,
   LogOut,
   Logs,
@@ -41,6 +42,7 @@ import {
   RotateCcw,
   Save,
   Search,
+  Server,
   Settings,
   Shield,
   SquarePen,
@@ -238,15 +240,17 @@ export function App() {
         <Shell host={host} reloadAuth={loadAuth} theme={theme} setTheme={setTheme}>
           <Routes>
             <Route path="/" element={<Dashboard host={host} />} />
-            <Route path="/units" element={<UnitsPage />} />
-            <Route path="/failed" element={<UnitsPage failedOnly />} />
+            {RESOURCE_VIEWS.map((v) => <Route key={v.path} path={v.path} element={<UnitsPage view={v} />} />)}
+            <Route path="/units" element={<Navigate to="/containers" replace />} />
+            <Route path="/failed" element={<Navigate to="/containers?status=failed" replace />} />
+            <Route path="/gpus" element={<Navigate to="/resources" replace />} />
+            <Route path="/updates" element={<Navigate to="/images" replace />} />
+            <Route path="/resources" element={<ResourcesView />} />
             <Route path="/fleet" element={<FleetView />} />
             <Route path="/policies" element={<PoliciesView />} />
             <Route path="/unit/:scope/:name" element={<UnitDetail />} />
             <Route path="/new" element={<AdminOnly><NewUnit /></AdminOnly>} />
             <Route path="/import" element={<AdminOnly><ImportView /></AdminOnly>} />
-            <Route path="/updates" element={<AdminOnly><UpdatesView /></AdminOnly>} />
-            <Route path="/gpus" element={<GPUsView />} />
             <Route path="/secrets" element={<AdminOnly><SecretsView /></AdminOnly>} />
             <Route path="/settings" element={<SettingsView host={host} />} />
             <Route path="/users" element={<Navigate to="/settings" replace />} />
@@ -281,6 +285,16 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   const [newUnitOpen, setNewUnitOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("rookery-sidebar") === "collapsed");
   const nav = navItems(auth.readOnly);
+  // Per-type counts for the sidebar so a newcomer sees the system's shape at a
+  // glance (and a "0" invites the first create). ponytail: reuses the units
+  // poll; lift to a shared context only if the double-fetch shows up as load.
+  const { units: navUnits } = useUnits(true);
+  const navCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    RESOURCE_VIEWS.forEach((v) => { c[v.path] = 0; });
+    navUnits.forEach((u) => { const v = viewForKind(u.kind); c[v] = (c[v] || 0) + 1; });
+    return c;
+  }, [navUnits]);
 
   useEffect(() => {
     localStorage.setItem("rookery-sidebar", sidebarCollapsed ? "collapsed" : "expanded");
@@ -318,7 +332,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
         <nav className="side-nav">{groupedNavItems(nav).map((group) => (
           <div className="nav-group" key={group.name}>
             <div className="nav-group-label">{group.name}</div>
-            {group.items.map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} />)}
+            {group.items.map((item) => <NavLinkItem key={item.to} item={item} active={isActive(location.pathname, item.to)} count={navCounts[item.to]} />)}
           </div>
         ))}</nav>
         <div className="sidebar-foot">
@@ -403,15 +417,35 @@ function failureSummary(failed: Array<{ name: string; error?: string }>) {
   return parts.join("; ");
 }
 
+// The typed resource views under "Manage" — one page per Quadlet kind family.
+// `kinds` is the set of unit kinds this page owns; `blurb` teaches a newcomer
+// what the type is (shown on the empty state). Every kind maps to exactly one
+// view via viewForKind, so no unit falls through.
+type ResourceView = { path: string; label: string; singular: string; icon: React.ElementType; kinds: string[]; catchAll?: boolean; blurb: string };
+const RESOURCE_VIEWS: ResourceView[] = [
+  { path: "/containers", label: "Containers", singular: "container", icon: Container, kinds: ["container"], catchAll: true, blurb: "A container runs one service from an image." },
+  { path: "/pods", label: "Pods", singular: "pod", icon: Boxes, kinds: ["pod", "kube"], blurb: "A pod groups containers that share a network and start and stop together." },
+  { path: "/networks", label: "Networks", singular: "network", icon: Network, kinds: ["network"], blurb: "A network lets containers reach each other by name." },
+  { path: "/volumes", label: "Volumes", singular: "volume", icon: HardDrive, kinds: ["volume"], blurb: "A volume stores data that outlives the container that writes it." },
+  { path: "/images", label: "Images", singular: "image", icon: Layers, kinds: ["image", "build"], blurb: "An image is the read-only template a container runs from." },
+];
+
+// Which Manage page owns a given unit kind. Anything unmapped (incl. plain
+// containers and unknown kinds) lands on Containers, the catch-all.
+const KIND_TO_VIEW: Record<string, string> = Object.fromEntries(
+  RESOURCE_VIEWS.filter((v) => !v.catchAll).flatMap((v) => v.kinds.map((k) => [k, v.path])),
+);
+function viewForKind(kind: string) {
+  return KIND_TO_VIEW[kind] || "/containers";
+}
+
 function navItems(readOnly: boolean) {
-  const base = [
+  const base: Array<{ to: string; label: string; icon: React.ElementType; group: string; admin?: boolean }> = [
     { to: "/", label: "Dashboard", icon: Home, group: "Observe" },
-    { to: "/units", label: "Units", icon: Boxes, group: "Operate" },
-    { to: "/failed", label: "Failed", icon: AlertTriangle, group: "Operate" },
-    { to: "/updates", label: "Updates", icon: Download, group: "Operate", admin: true },
-    { to: "/gpus", label: "GPUs", icon: Cpu, group: "Operate" },
-    { to: "/fleet", label: "Fleet", icon: Network, group: "Govern" },
+    ...RESOURCE_VIEWS.map((v) => ({ to: v.path, label: v.label, icon: v.icon, group: "Manage" })),
+    { to: "/fleet", label: "Fleet", icon: Server, group: "Govern" },
     { to: "/policies", label: "Policy", icon: Shield, group: "Govern" },
+    { to: "/resources", label: "Resources", icon: Cpu, group: "Govern" },
     { to: "/import", label: "Import", icon: Import, group: "Admin", admin: true },
     { to: "/secrets", label: "Secrets", icon: KeyRound, group: "Admin", admin: true },
     { to: "/settings", label: "Settings", icon: Settings, group: "Admin" },
@@ -422,7 +456,7 @@ function navItems(readOnly: boolean) {
 // Couch-triage priority for the 5 bottom-nav slots; anything not listed
 // fills remaining slots in sidebar order (matters for viewer accounts,
 // whose nav lacks the admin items).
-const MOBILE_NAV_ORDER = ["/", "/units", "/failed", "/updates", "/settings"];
+const MOBILE_NAV_ORDER = ["/", "/containers", "/pods", "/fleet", "/settings"];
 
 function mobileNavItems<T extends { to: string }>(items: T[]) {
   const prioritized = MOBILE_NAV_ORDER.flatMap((to) => {
@@ -434,16 +468,17 @@ function mobileNavItems<T extends { to: string }>(items: T[]) {
 }
 
 function groupedNavItems(items: Array<{ to: string; label: string; icon: React.ElementType; group?: string }>) {
-  const order = ["Observe", "Operate", "Govern", "Admin"];
-  return order.map((name) => ({ name, items: items.filter((item) => (item.group || "Operate") === name) })).filter((group) => group.items.length);
+  const order = ["Observe", "Manage", "Govern", "Admin"];
+  return order.map((name) => ({ name, items: items.filter((item) => (item.group || "Manage") === name) })).filter((group) => group.items.length);
 }
 
-function NavLinkItem({ item, active, compact, onClick }: { item: { to: string; label: string; icon: React.ElementType }; active: boolean; compact?: boolean; onClick?: () => void }) {
+function NavLinkItem({ item, active, compact, onClick, count }: { item: { to: string; label: string; icon: React.ElementType }; active: boolean; compact?: boolean; onClick?: () => void; count?: number }) {
   const Icon = item.icon;
   return (
     <Link onClick={onClick} className={`${compact ? "bottom-link" : "nav-link"} ${active ? "active" : ""}`} to={item.to} title={item.label}>
       <Icon size={compact ? 20 : 17} />
       <span>{item.label}</span>
+      {!compact && count !== undefined && <span className="nav-count">{count}</span>}
     </Link>
   );
 }
@@ -803,25 +838,23 @@ function summarizeUnits(units: Unit[]) {
   };
 }
 
-function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
+function UnitsPage({ view }: { view: ResourceView }) {
   const { units, scopeErrors, error, loading, reload } = useUnits(true);
   const { auth, toast } = useApiContext();
   const api = useApi();
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get("q") || "");
-  const [kind, setKind] = useState(params.get("kind") || "all");
   const [scope, setScope] = useState(params.get("scope") || "all");
-  const [status, setStatus] = useState<UnitState | "all">((params.get("status") as UnitState | "all") || (failedOnly ? "failed" : "all"));
+  const [status, setStatus] = useState<UnitState | "all">((params.get("status") as UnitState | "all") || "all");
   const [sort, setSort] = useState(params.get("sort") || "name");
   const [compact, setCompact] = useState(() => localStorage.getItem("rookery-units-density") === "compact");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState("");
+  const ofType = useMemo(() => units.filter((u) => viewForKind(u.kind) === view.path), [units, view.path]);
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    const rows = units.filter((u) => {
+    const rows = ofType.filter((u) => {
       const cls = stateClass(u);
-      if (failedOnly && cls !== "failed") return false;
-      if (kind !== "all" && u.kind !== kind) return false;
       if (scope !== "all" && u.scope !== scope) return false;
       if (status !== "all" && cls !== status) return false;
       return !needle || `${u.name} ${u.description || ""} ${u.image || ""} ${u.pod || ""}`.toLowerCase().includes(needle);
@@ -831,15 +864,14 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
       const bv = sort === "state" ? stateLabel(b) : sort === "scope" ? b.scope : sort === "kind" ? b.kind : b.name;
       return av.localeCompare(bv);
     });
-  }, [failedOnly, kind, q, scope, sort, status, units]);
-  const kinds = ["all", ...Array.from(new Set(units.map((u) => u.kind))).sort()];
+  }, [ofType, q, scope, sort, status]);
   const scopes = ["all", ...Array.from(new Set(units.map((u) => u.scope))).sort()];
   const selectedUnits = filtered.filter((u) => selected.has(`${u.scope}/${u.name}`));
   const statusCounts = useMemo(() => {
-    const counts: Record<UnitState | "all", number> = { all: units.length, running: 0, failed: 0, pending: 0, stopped: 0, unknown: 0 };
-    units.forEach((u) => { counts[stateClass(u)] += 1; });
+    const counts: Record<UnitState | "all", number> = { all: ofType.length, running: 0, failed: 0, pending: 0, stopped: 0, unknown: 0 };
+    ofType.forEach((u) => { counts[stateClass(u)] += 1; });
     return counts;
-  }, [units]);
+  }, [ofType]);
 
   useEffect(() => {
     localStorage.setItem("rookery-units-density", compact ? "compact" : "comfortable");
@@ -847,12 +879,11 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
   useEffect(() => {
     const next = new URLSearchParams();
     if (q) next.set("q", q);
-    if (kind !== "all") next.set("kind", kind);
     if (scope !== "all") next.set("scope", scope);
-    if (status !== (failedOnly ? "failed" : "all")) next.set("status", status);
+    if (status !== "all") next.set("status", status);
     if (sort !== "name") next.set("sort", sort);
     setParams(next, { replace: true });
-  }, [failedOnly, kind, q, scope, setParams, sort, status]);
+  }, [q, scope, setParams, sort, status]);
 
   function toggleUnit(unit: Unit, checked: boolean) {
     const key = `${unit.scope}/${unit.name}`;
@@ -897,26 +928,24 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
     }
   }
 
+  const addBtn = !auth.readOnly && <Link className="btn btn-accent" to={`/new?kind=${view.singular}`}><Plus size={16} /> Add {view.singular}</Link>;
   return (
-    <Page title={failedOnly ? "Failed units" : "Units"} kicker={failedOnly ? "Triage and restart" : "Search, filter, and act"}>
+    <Page title={view.label} kicker={view.blurb} action={addBtn}>
       <ScopeErrors errors={scopeErrors} />
       {error && <p className="banner banner-error">{error}</p>}
-      {!failedOnly && (
-        <div className="status-filter" aria-label="Filter units by status">
-          {(["all", "running", "failed", "pending", "stopped", "unknown"] as Array<UnitState | "all">).map((s) => (
-            <button key={s} className={`status-pill ${status === s ? "active" : ""}`} onClick={() => setStatus(s)}>
-              <span className={s === "all" ? "dot all" : `dot ${s}`} />
-              <span className="status-pill-label">{s}</span>
-              <strong>{statusCounts[s]}</strong>
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="status-filter" aria-label="Filter by status">
+        {(["all", "running", "failed", "pending", "stopped", "unknown"] as Array<UnitState | "all">).map((s) => (
+          <button key={s} className={`status-pill ${status === s ? "active" : ""}`} onClick={() => setStatus(s)}>
+            <span className={s === "all" ? "dot all" : `dot ${s}`} />
+            <span className="status-pill-label">{s}</span>
+            <strong>{statusCounts[s]}</strong>
+          </button>
+        ))}
+      </div>
       <div className="filterbar units-filterbar">
-        <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name, image, pod..." /></label>
-        <select className="input" value={kind} onChange={(e) => setKind(e.target.value)}>{kinds.map((k) => <option key={k}>{k}</option>)}</select>
+        <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter ${view.label.toLowerCase()} by name, image, pod...`} /></label>
         <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
-        <select className="input" value={sort} onChange={(e) => setSort(e.target.value)}><option value="name">sort name</option><option value="state">sort state</option><option value="scope">sort scope</option><option value="kind">sort kind</option></select>
+        <select className="input" value={sort} onChange={(e) => setSort(e.target.value)}><option value="name">sort name</option><option value="state">sort state</option><option value="scope">sort scope</option></select>
         <label className="check density-toggle"><input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} /> compact rows</label>
       </div>
       {!auth.readOnly && filtered.length > 0 && (
@@ -930,7 +959,11 @@ function UnitsPage({ failedOnly = false }: { failedOnly?: boolean }) {
         <div className="unit-list">{filtered.map((u) => auth.readOnly
           ? <UnitRow key={`${u.scope}/${u.name}`} unit={u} onChanged={reload} compact={compact} />
           : <div className="select-row" key={`${u.scope}/${u.name}`}><input type="checkbox" checked={selected.has(`${u.scope}/${u.name}`)} onChange={(e) => toggleUnit(u, e.target.checked)} /><UnitRow unit={u} onChanged={reload} compact={compact} /></div>)}</div>
-      ) : <EmptyState title="No matching units" text="Adjust the filters or create a new unit." />}
+      ) : ofType.length === 0 ? (
+        <EmptyState icon={view.icon} title={`No ${view.label.toLowerCase()} yet`} text={view.blurb} action={addBtn} />
+      ) : (
+        <EmptyState title={`No matching ${view.label.toLowerCase()}`} text="Adjust the filters above." />
+      )}
     </Page>
   );
 }
@@ -946,14 +979,18 @@ function KindIcon({ kind, size = 13 }: { kind: string; size?: number }) {
       return <Network size={size} />;
     case "volume":
       return <HardDrive size={size} />;
+    case "image":
+    case "build":
+      return <Layers size={size} />;
     default:
-      return <Box size={size} />;
+      return <Container size={size} />;
   }
 }
 
 function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: () => void; compact?: boolean }) {
   const { auth, toast } = useApiContext();
   const api = useApi();
+  const navigate = useNavigate();
   const [acting, setActing] = useState("");
   const cls = stateClass(unit);
   const canStart = cls === "stopped" || cls === "failed";
@@ -994,7 +1031,7 @@ function UnitRow({ unit, onChanged, compact = false }: { unit: Unit; onChanged: 
         {unit.health && <span className={`badge ${unit.health === "unhealthy" ? "badge-failed" : unit.health === "healthy" ? "badge-running" : "badge-warn"}`}>{unit.health}</span>}
         {unit.stats && <span className="badge">{(unit.stats.cpuPct || 0).toFixed(1)}% cpu</span>}
         {unit.stats?.memBytes ? <span className="badge">{fmtBytes(unit.stats.memBytes)}</span> : null}
-        {unit.pod && <span className="badge">pod {unit.pod.replace(/\.pod$/, "")}</span>}
+        {unit.pod && <span className="badge badge-pod" title={`pod ${unit.pod}`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/unit/${encodeURIComponent(unit.scope)}/${encodeURIComponent(unit.pod!)}`); }}><Boxes size={12} /> {unit.pod.replace(/\.pod$/, "")}</span>}
         {!!unit.gpus?.length && <span className="badge badge-gpu">gpu</span>}
       </span>
       {!auth.readOnly && (
@@ -2095,7 +2132,10 @@ function UpdateRow({ row, after, busy }: { row: UpdateInfo; after: () => Promise
   );
 }
 
-function GPUsView() {
+// ResourcesView: per-host hardware inventory. ponytail: 1a ships GPUs (which
+// already carry a `host` tag); per-node CPU/mem/disk gauges + the node dropdown
+// land in 1b once the fleet metrics endpoint is wired.
+function ResourcesView() {
   const api = useApi();
   const [devices, setDevices] = useState<GPUDevice[]>([]);
   const [error, setError] = useState("");
@@ -2103,9 +2143,9 @@ function GPUsView() {
     api<{ devices?: GPUDevice[] }>("/api/gpus").then(({ body }) => setDevices(body.devices || [])).catch((e) => setError((e as Error).message));
   }, [api]);
   return (
-    <Page title="GPUs" kicker="Inventory and utilization">
+    <Page title="Resources" kicker="Host inventory and utilization">
       {error && <p className="banner banner-error">{error}</p>}
-      <Panel title="Devices" icon={Cpu}>
+      <Panel title="GPUs" icon={Cpu}>
         {devices.length ? devices.map((d) => <GpuRow key={`${d.host || "local"}-${d.name}`} device={d} />) : <p className="muted">No GPU devices detected.</p>}
       </Panel>
     </Page>
@@ -2748,6 +2788,6 @@ function ScopeErrors({ errors }: { errors: Record<string, string> }) {
   return <>{Object.entries(errors).map(([scope, error]) => <p key={scope} className="banner banner-warn">scope <b>{scope}</b>: {error}</p>)}</>;
 }
 
-function EmptyState({ title, text }: { title: string; text: string }) {
-  return <div className="empty"><HardDrive size={38} /><h2>{title}</h2><p className="muted">{text}</p></div>;
+function EmptyState({ title, text, icon: Icon = HardDrive, action }: { title: string; text: string; icon?: React.ElementType; action?: React.ReactNode }) {
+  return <div className="empty"><Icon size={38} /><h2>{title}</h2><p className="muted">{text}</p>{action && <div className="empty-action">{action}</div>}</div>;
 }
