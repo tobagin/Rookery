@@ -60,9 +60,9 @@ type resourceJSON struct {
 
 // handleListResources lists live podman networks and volumes so the typed pages
 // show real objects, not just the (usually empty) set of .network/.volume
-// Quadlet units. ponytail: Slice 1 covers only the local rootful scope via the
-// single s.pod client; rootless-local and remote scopes fill in once the agent
-// grows a resources endpoint.
+// Quadlet units. Every scope is covered: the local rootful store via s.pod,
+// each local rootless user session via its own /run/user socket, and remote
+// hosts via their agent.
 func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	out := []resourceJSON{}
 	scopeErrors := map[string]string{}
