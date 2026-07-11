@@ -2528,7 +2528,10 @@ function ResourcesView() {
   const node = nodes.find((n) => n.id === sel);
   const m = node?.metrics;
   const memPct = m?.memTotalKb ? Math.round(100 * (1 - (m.memAvailKb || 0) / m.memTotalKb)) : null;
-  const nodeGpus = devices.filter((d) => node?.local ? (!d.host || d.host === "local" || d.host === m?.hostname) : (d.host === node?.id || d.host === m?.hostname));
+  // Non-local nodes only own GPUs explicitly tagged with their id/hostname;
+  // require d.host to be set so local GPUs (no host field) never leak onto a
+  // remote node that happens to lack metrics (undefined === undefined).
+  const nodeGpus = devices.filter((d) => node?.local ? (!d.host || d.host === "local" || d.host === m?.hostname) : (!!d.host && (d.host === node?.id || d.host === m?.hostname)));
   return (
     <Page title="Resources" subtitle="Host inventory and utilization">
       {error && <p className="banner banner-error">{error}</p>}
@@ -2547,9 +2550,11 @@ function ResourcesView() {
         {m?.memTotalKb ? <><dt>memory</dt><dd>{fmtBytes(m.memTotalKb * 1024)}</dd></> : null}
         {!m && <><dt>metrics</dt><dd className="muted">not reported for this node yet</dd></>}
       </dl>
-      <Panel title="GPUs" icon={Gpu}>
-        {nodeGpus.length ? nodeGpus.map((d) => <GpuRow key={`${d.host || "local"}-${d.name}`} device={d} />) : <p className="muted">No GPU devices on this node.</p>}
-      </Panel>
+      {nodeGpus.length > 0 && (
+        <Panel title="GPUs" icon={Gpu}>
+          {nodeGpus.map((d) => <GpuRow key={`${d.host || "local"}-${d.name}`} device={d} />)}
+        </Panel>
+      )}
     </Page>
   );
 }
