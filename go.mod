@@ -3,7 +3,7 @@ module github.com/rookerylabs/rookery
 go 1.25.0
 
 require (
-	github.com/rookerylabs/rookery-agent-api v0.4.0
+	github.com/rookerylabs/rookery-agent-api v0.5.0
 	modernc.org/sqlite v1.53.0
 )
 

@@ -385,6 +385,64 @@ func (c *Client) inspect(ctx context.Context, path string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// Usage flags which networks/volumes/images are referenced, keyed by name (and
+// by repo:tag for images), so a resource row can show used vs unused at a
+// glance without a per-row inspect.
+type Usage struct {
+	Networks map[string]bool
+	Volumes  map[string]bool
+	Images   map[string]bool
+}
+
+// ResourceUsage computes used-sets in one shot: volumes from `system df`
+// (Links), images from the container list (a container's Image is a repo:tag),
+// networks by inspecting each (podman only reports a network's attached
+// containers on inspect). Best-effort — a failed sub-call just leaves that set
+// empty rather than erroring the whole listing.
+func (c *Client) ResourceUsage(ctx context.Context) Usage {
+	u := Usage{Networks: map[string]bool{}, Volumes: map[string]bool{}, Images: map[string]bool{}}
+	if resp, err := c.get(ctx, "/system/df"); err == nil {
+		var df struct {
+			Volumes []struct {
+				VolumeName string `json:"VolumeName"`
+				Links      int    `json:"Links"`
+			} `json:"Volumes"`
+		}
+		json.NewDecoder(resp.Body).Decode(&df)
+		resp.Body.Close()
+		for _, v := range df.Volumes {
+			if v.Links > 0 {
+				u.Volumes[v.VolumeName] = true
+			}
+		}
+	}
+	if cs, err := c.Containers(ctx); err == nil {
+		for _, ct := range cs {
+			if ct.Image != "" {
+				u.Images[ct.Image] = true
+			}
+		}
+	}
+	if nets, err := c.Networks(ctx); err == nil {
+		for _, n := range nets {
+			if raw, err := c.InspectNetwork(ctx, n.Name); err == nil && networkHasContainers(raw) {
+				u.Networks[n.Name] = true
+			}
+		}
+	}
+	return u
+}
+
+// networkHasContainers reports whether a network inspect body lists any
+// attached container.
+func networkHasContainers(raw []byte) bool {
+	var n struct {
+		Containers map[string]any `json:"containers"`
+	}
+	json.Unmarshal(raw, &n)
+	return len(n.Containers) > 0
+}
+
 func (c *Client) delete(ctx context.Context, path string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, "http://d/v5.0.0/libpod"+path, nil)
 	if err != nil {

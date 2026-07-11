@@ -17,6 +17,7 @@ type resourcesAPI interface {
 	Networks(ctx context.Context) ([]podman.NetworkSummary, error)
 	Volumes(ctx context.Context) ([]podman.VolumeSummary, error)
 	Images(ctx context.Context) ([]podman.ImageSummary, error)
+	ResourceUsage(ctx context.Context) podman.Usage
 }
 
 // humanBytes renders a byte count like "1.4 GB" for the resource Detail field.
@@ -54,6 +55,7 @@ type resourceJSON struct {
 	Driver  string `json:"driver,omitempty"`
 	Detail  string `json:"detail,omitempty"` // subnet for networks, mountpoint for volumes
 	Managed bool   `json:"managed"`
+	Used    bool   `json:"used"` // referenced by a container/unit
 }
 
 // handleListResources lists live podman networks and volumes so the typed pages
@@ -85,6 +87,7 @@ func (s *Server) appendLocalResources(r *http.Request, area Area, out []resource
 	}
 	managed := s.managedResourceNames(r.Context(), area)
 	node := areaNodeID(area)
+	used := rp.ResourceUsage(r.Context())
 	if nets, err := rp.Networks(r.Context()); err != nil {
 		scopeErrors[area.Label] = err.Error()
 	} else {
@@ -93,14 +96,14 @@ func (s *Server) appendLocalResources(r *http.Request, area Area, out []resource
 			if len(n.Subnets) > 0 {
 				detail = n.Subnets[0].Subnet
 			}
-			out = append(out, resourceJSON{Kind: "network", Name: n.Name, Scope: area.Label, Node: node, Driver: n.Driver, Detail: detail, Managed: managed["network:"+n.Name]})
+			out = append(out, resourceJSON{Kind: "network", Name: n.Name, Scope: area.Label, Node: node, Driver: n.Driver, Detail: detail, Managed: managed["network:"+n.Name], Used: used.Networks[n.Name]})
 		}
 	}
 	if vols, err := rp.Volumes(r.Context()); err != nil {
 		scopeErrors[area.Label] = err.Error()
 	} else {
 		for _, v := range vols {
-			out = append(out, resourceJSON{Kind: "volume", Name: v.Name, Scope: area.Label, Node: node, Driver: v.Driver, Detail: v.Mountpoint, Managed: managed["volume:"+v.Name]})
+			out = append(out, resourceJSON{Kind: "volume", Name: v.Name, Scope: area.Label, Node: node, Driver: v.Driver, Detail: v.Mountpoint, Managed: managed["volume:"+v.Name], Used: used.Volumes[v.Name]})
 		}
 	}
 	if imgs, err := rp.Images(r.Context()); err != nil {
@@ -111,7 +114,7 @@ func (s *Server) appendLocalResources(r *http.Request, area Area, out []resource
 			if name == "" {
 				continue // skip dangling/intermediate images
 			}
-			out = append(out, resourceJSON{Kind: "image", Name: name, Scope: area.Label, Node: node, Detail: humanBytes(im.Size)})
+			out = append(out, resourceJSON{Kind: "image", Name: name, Scope: area.Label, Node: node, Detail: humanBytes(im.Size), Used: used.Images[name]})
 		}
 	}
 	return out
@@ -348,7 +351,7 @@ func (s *Server) appendAgentResources(r *http.Request, area Area, out []resource
 	}
 	node := areaNodeID(area)
 	for _, rr := range res {
-		out = append(out, resourceJSON{Kind: rr.Kind, Name: rr.Name, Scope: area.Label, Node: node, Driver: rr.Driver, Detail: rr.Detail, Managed: rr.Managed})
+		out = append(out, resourceJSON{Kind: rr.Kind, Name: rr.Name, Scope: area.Label, Node: node, Driver: rr.Driver, Detail: rr.Detail, Managed: rr.Managed, Used: rr.Used})
 	}
 	return out
 }

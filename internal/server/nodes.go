@@ -74,9 +74,12 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 					nodes[i].Metrics = &m
 				}
 			case area.ViaAgent():
-				// Agent nodes may be on another host; host metrics aren't
-				// exposed over the agent API yet, so leave them nil rather
-				// than report the wrong machine's numbers.
+				// The agent runs on the node's host and serves its own host
+				// metrics (host-level, same for every scope it manages).
+				if hm, err := area.Agent.Metrics(r.Context()); err == nil {
+					m := hostinfo.Metrics(hm)
+					nodes[i].Metrics = &m
+				}
 			default:
 				m := hostinfo.Read()
 				nodes[i].Metrics = &m

@@ -21,6 +21,7 @@ type fakePodman struct {
 	networks []podman.NetworkSummary
 	volumes  []podman.VolumeSummary
 	images   []podman.ImageSummary
+	usage    podman.Usage
 }
 
 func (f *fakePodman) Networks(context.Context) ([]podman.NetworkSummary, error) {
@@ -31,6 +32,9 @@ func (f *fakePodman) Volumes(context.Context) ([]podman.VolumeSummary, error) {
 }
 func (f *fakePodman) Images(context.Context) ([]podman.ImageSummary, error) {
 	return f.images, nil
+}
+func (f *fakePodman) ResourceUsage(context.Context) podman.Usage {
+	return f.usage
 }
 
 func (f *fakePodman) Info(context.Context) (*podman.Info, error) {

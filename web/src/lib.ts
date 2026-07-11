@@ -48,6 +48,7 @@ export interface Resource {
   driver?: string;
   detail?: string;
   managed: boolean;
+  used?: boolean; // referenced by a container/unit; drives the row icon color
 }
 
 export interface HostInfo {

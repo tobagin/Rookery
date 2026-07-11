@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rookerylabs/rookery/internal/agent"
 	"github.com/rookerylabs/rookery/internal/convert"
+	"github.com/rookerylabs/rookery/internal/gpu"
 	"github.com/rookerylabs/rookery/internal/hostinfo"
 	"github.com/rookerylabs/rookery/internal/journal"
 	"github.com/rookerylabs/rookery/internal/quadlet"
@@ -1037,21 +1039,48 @@ func (s *Server) handleGPUs(w http.ResponseWriter, r *http.Request) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, a := range s.areasSnapshot() {
-		if !a.Remote() || seen[a.Scope.SSH] {
-			continue
-		}
-		seen[a.Scope.SSH] = true
-		wg.Add(1)
-		go func(label, target string) {
-			defer wg.Done()
-			remote := s.remoteGPUs(ctx, target)
-			mu.Lock()
-			defer mu.Unlock()
-			for _, d := range remote {
-				d.Host = label
-				devices = append(devices, d)
+		switch {
+		case a.ViaAgent():
+			// One agent = one host; dedup by node so a host's many scopes
+			// don't each probe its GPUs.
+			node := areaNodeID(a)
+			if seen["agent:"+node] {
+				continue
 			}
-		}(a.Label, a.Scope.SSH)
+			seen["agent:"+node] = true
+			wg.Add(1)
+			go func(label string, cl *agent.Client) {
+				defer wg.Done()
+				got, err := cl.GPUs(ctx)
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				for _, g := range got {
+					devices = append(devices, gpu.Device{
+						Index: g.Index, Vendor: g.Vendor, Name: g.Name, Host: label,
+						MemoryTotalMB: g.MemoryTotalMB, MemoryUsedMB: g.MemoryUsedMB, UtilizationPct: g.UtilizationPct,
+					})
+				}
+			}(areaNodeID(a), a.Agent)
+		case a.Remote():
+			if seen[a.Scope.SSH] {
+				continue
+			}
+			seen[a.Scope.SSH] = true
+			wg.Add(1)
+			go func(label, target string) {
+				defer wg.Done()
+				remote := s.remoteGPUs(ctx, target)
+				mu.Lock()
+				defer mu.Unlock()
+				for _, d := range remote {
+					d.Host = label
+					devices = append(devices, d)
+				}
+			}(a.Label, a.Scope.SSH)
+		}
 	}
 	wg.Wait()
 	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})

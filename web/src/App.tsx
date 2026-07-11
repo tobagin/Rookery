@@ -26,7 +26,7 @@ import {
   Home,
   Import,
   KeyRound,
-  Layers,
+  Package,
   ListFilter,
   LogOut,
   Logs,
@@ -453,7 +453,7 @@ const RESOURCE_VIEWS: ResourceView[] = [
   { path: "/pods", label: "Pods", singular: "pod", icon: Boxes, kinds: ["pod", "kube"], runnable: true, blurb: "Containers grouped and managed together." },
   { path: "/networks", label: "Networks", singular: "network", icon: Network, kinds: ["network"], blurb: "Lets containers reach each other by name." },
   { path: "/volumes", label: "Volumes", singular: "volume", icon: HardDrive, kinds: ["volume"], blurb: "Storage that outlives the container." },
-  { path: "/images", label: "Images", singular: "image", icon: Layers, kinds: ["image", "build"], blurb: "The templates your containers run from." },
+  { path: "/images", label: "Images", singular: "image", icon: Package, kinds: ["image", "build"], blurb: "The templates your containers run from." },
 ];
 
 // Which Manage page owns a given unit kind. Anything unmapped (incl. plain
@@ -1081,7 +1081,7 @@ function ResourceRow({ res, onChanged, updateAvailable }: { res: Resource; onCha
   return (
     <div className="unit-row resource-row">
       <div className="resource-click" onClick={() => setDetailOpen(true)}>
-        <span className="state-icon running" title={res.kind}><KindIcon kind={res.kind} size={17} /></span>
+        <span className={`state-icon ${res.used ? "running" : "stopped"}`} title={res.used ? `${res.kind} — in use` : `${res.kind} — unused`}><KindIcon kind={res.kind} size={17} /></span>
         <span className="unit-main">
           <span className="unit-title">{res.name}</span>
           <span className="unit-sub">{[res.driver, res.detail].filter(Boolean).join(" · ") || res.scope}</span>
@@ -1142,7 +1142,7 @@ function KindIcon({ kind, size = 13 }: { kind: string; size?: number }) {
       return <HardDrive size={size} />;
     case "image":
     case "build":
-      return <Layers size={size} />;
+      return <Package size={size} />;
     default:
       return <Container size={size} />;
   }
@@ -2124,7 +2124,7 @@ function CreateFlow({ kind, onCreated }: { kind: string; onCreated?: () => void 
   return (
     <div className="create-flow">
       <div className="create-mode">
-        <div className="segmented">
+        <div className="segmented text-segmented">
           <button className={mode === "wizard" ? "active" : ""} onClick={() => setMode("wizard")}>Guided wizard</button>
           <button className={mode === "editor" ? "active" : ""} onClick={() => setMode("editor")}>Editor</button>
         </div>
@@ -2368,33 +2368,16 @@ function ImagesView({ view }: { view: ResourceView }) {
   const [stale, setStale] = useState<{ count: number; bytes: number } | null>(null);
   const [operation, setOperation] = useState<{ title: string; lines: string[] } | null>(null);
   const [q, setQ] = useState(params.get("q") || "");
-  const [scope, setScope] = useState(params.get("scope") || "all");
-  const [status, setStatus] = useState(params.get("status") || "all");
-  const [sort, setSort] = useState(params.get("sort") || "name");
   const available = updates.filter((u) => u.updateAvailable);
   const noted = updates.filter((u) => u.note && !u.updateAvailable);
   const current = updates.filter((u) => !u.note && !u.updateAvailable);
-  const scopes = ["all", ...Array.from(new Set(updates.map((row) => row.scope))).sort()];
-  const filtered = updates.filter((row) => {
-    const needle = q.trim().toLowerCase();
-    if (scope !== "all" && row.scope !== scope) return false;
-    if (status === "available" && !row.updateAvailable) return false;
-    if (status === "current" && (row.updateAvailable || row.note)) return false;
-    if (status === "skipped" && (!row.note || row.updateAvailable)) return false;
-    return !needle || `${row.name} ${row.image || ""} ${row.note || ""} ${row.scope}`.toLowerCase().includes(needle);
-  }).sort((a, b) => {
-    const av = sort === "scope" ? a.scope : sort === "status" ? (a.updateAvailable ? "available" : a.note || "current") : a.name;
-    const bv = sort === "scope" ? b.scope : sort === "status" ? (b.updateAvailable ? "available" : b.note || "current") : b.name;
-    return av.localeCompare(bv);
-  });
+  const needle = q.trim().toLowerCase();
+  const shownImages = storeImages.filter((im) => !needle || `${im.name} ${im.scope}`.toLowerCase().includes(needle));
   useEffect(() => {
     const next = new URLSearchParams();
     if (q) next.set("q", q);
-    if (scope !== "all") next.set("scope", scope);
-    if (status !== "all") next.set("status", status);
-    if (sort !== "name") next.set("sort", sort);
     setParams(next, { replace: true });
-  }, [q, scope, setParams, sort, status]);
+  }, [q, setParams]);
 
   async function refreshStaleImages() {
     const staleResp = await api<{ count: number; bytes: number }>("/api/images/stale").catch(() => null);
@@ -2457,9 +2440,6 @@ function ImagesView({ view }: { view: ResourceView }) {
   return (
     <Page title={view.label} subtitle="Image units, updates, and cleanup">
       {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
-      <Panel title={`Images in store (${storeImages.length})`} icon={Layers}>
-        {storeImages.length ? storeImages.map((im, i) => <ResourceRow key={`${im.node || ""}/${im.scope}/${im.name}/${i}`} res={im} onChanged={reloadResources} updateAvailable={updates.some((u) => u.updateAvailable && u.image === im.name)} />) : <p className="muted">No tagged images in the store yet.</p>}
-      </Panel>
       <p className="banner">Image prune and container import are local-host operations; remote hosts still support update checks and pulls where configured.</p>
       <div className="tiles">
         <MetricTile label="updates available" value={available.length} tone={available.length ? "warn" : "dim"} />
@@ -2471,14 +2451,13 @@ function ImagesView({ view }: { view: ResourceView }) {
       <Panel title="Available updates" icon={Download}>
         {available.length ? available.map((row) => <UpdateRow key={`${row.scope}/${row.name}`} row={row} after={() => check(false)} busy={!!operation} />) : <p className="muted">No image updates currently flagged.</p>}
       </Panel>
-      <Panel title="Checked units" icon={ListFilter}>
-        <div className="filterbar">
-          <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter checked units..." /></label>
-          <select className="input" value={scope} onChange={(e) => setScope(e.target.value)}>{scopes.map((s) => <option key={s}>{s}</option>)}</select>
-          <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">all statuses</option><option value="available">update available</option><option value="current">current</option><option value="skipped">skipped / errors</option></select>
-          <select className="input" value={sort} onChange={(e) => setSort(e.target.value)}><option value="name">sort name</option><option value="scope">sort scope</option><option value="status">sort status</option></select>
+      <Panel title={`Images in store (${storeImages.length})`} icon={Package}>
+        <div className="filterbar units-filterbar">
+          <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter images by name, scope..." /></label>
         </div>
-        {updates.length ? filtered.length ? filtered.map((row) => <div className="history-row" key={`${row.scope}/${row.name}`}><span className="grow">{row.name}<span className="muted"> {row.image}</span></span><span className="badge">{row.scope}</span><span className={row.updateAvailable ? "warn-text" : "muted"}>{row.updateAvailable ? "update available" : row.note || "current"}</span></div>) : <EmptyState title="No matching update rows" text="Adjust the update filters or run a fresh check." /> : <p className="muted">Run a check to populate results.</p>}
+        {storeImages.length ? shownImages.length ? (
+          <div className="unit-list">{shownImages.map((im, i) => <ResourceRow key={`${im.node || ""}/${im.scope}/${im.name}/${i}`} res={im} onChanged={reloadResources} updateAvailable={updates.some((u) => u.updateAvailable && u.image === im.name)} />)}</div>
+        ) : <EmptyState title="No matching images" text="Adjust the filter above." /> : <p className="muted">No tagged images in the store yet.</p>}
       </Panel>
     </Page>
   );
@@ -2530,12 +2509,12 @@ function ResourcesView() {
   const node = nodes.find((n) => n.id === sel);
   const m = node?.metrics;
   const memPct = m?.memTotalKb ? Math.round(100 * (1 - (m.memAvailKb || 0) / m.memTotalKb)) : null;
-  const nodeGpus = devices.filter((d) => node?.local ? (!d.host || d.host === "local" || d.host === m?.hostname) : d.host === (m?.hostname || node?.id));
+  const nodeGpus = devices.filter((d) => node?.local ? (!d.host || d.host === "local" || d.host === m?.hostname) : (d.host === node?.id || d.host === m?.hostname));
   return (
     <Page title="Resources" subtitle="Host inventory and utilization">
       {error && <p className="banner banner-error">{error}</p>}
       {nodes.length > 1 && (
-        <div className="filterbar"><select className="input" value={sel} onChange={(e) => setSel(e.target.value)}>{nodes.map((n) => <option key={n.id} value={n.id}>{n.local ? "local" : n.id}{n.metrics?.hostname && n.metrics.hostname !== n.id ? ` · ${n.metrics.hostname}` : ""}</option>)}</select></div>
+        <div className="filterbar resources-bar"><select className="input" value={sel} onChange={(e) => setSel(e.target.value)}>{nodes.map((n) => <option key={n.id} value={n.id}>{n.local ? "local" : n.id}{n.metrics?.hostname && n.metrics.hostname !== n.id ? ` · ${n.metrics.hostname}` : ""}</option>)}</select></div>
       )}
       <div className="tiles">
         {m?.cpuPct != null && m.cpuPct >= 0 && <MetricTile label="cpu" value={`${m.cpuPct}%`} tone="dim" meter={m.cpuPct} />}

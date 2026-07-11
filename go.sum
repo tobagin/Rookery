@@ -14,6 +14,8 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/rookerylabs/rookery-agent-api v0.4.0 h1:4ZXtZFCxTFW1a9zdUgCPKYkEafiqDcb6qVuAW3zICFs=
 github.com/rookerylabs/rookery-agent-api v0.4.0/go.mod h1:A9PSZNLMtVyFjCY90lZ8Cmfpg0OPAAH8xTSIbRU+GW4=
+github.com/rookerylabs/rookery-agent-api v0.5.0 h1:XjvOmX8S/yBthgDmOECgtJiRvcyT0/Fe76NGxvR9h3I=
+github.com/rookerylabs/rookery-agent-api v0.5.0/go.mod h1:A9PSZNLMtVyFjCY90lZ8Cmfpg0OPAAH8xTSIbRU+GW4=
 golang.org/x/mod v0.36.0 h1:JJjpVx6myfUsUdAzZuOSTTmRE0PfZeNWzzvKrP7amb4=
 golang.org/x/mod v0.36.0/go.mod h1:moc6ELqsWcOw5Ef3xVprK5ul/MvtVvkIXLziUOICjUQ=
 golang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=

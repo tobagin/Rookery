@@ -100,6 +100,20 @@ func (c *Client) Resources(ctx context.Context, scope string) ([]api.Resource, e
 	return res, err
 }
 
+// Metrics returns the agent host's health snapshot (host-level, no scope).
+func (c *Client) Metrics(ctx context.Context) (api.HostMetrics, error) {
+	var m api.HostMetrics
+	err := c.do(ctx, http.MethodGet, api.PathMetrics, &m)
+	return m, err
+}
+
+// GPUs returns the agent host's GPU inventory (host-level, no scope).
+func (c *Client) GPUs(ctx context.Context) ([]api.GPUDevice, error) {
+	var g []api.GPUDevice
+	err := c.do(ctx, http.MethodGet, api.PathGPUs, &g)
+	return g, err
+}
+
 // DeleteResource removes a network/volume/image from a scope's podman store.
 func (c *Client) DeleteResource(ctx context.Context, scope, kind, name string) error {
 	path := scoped(api.PathResources, scope) + "&kind=" + url.QueryEscape(kind) + "&name=" + url.QueryEscape(name)
