@@ -2418,6 +2418,24 @@ function ImagesView({ view }: { view: ResourceView }) {
     }
   }
 
+  // Prune every image no container references (podman prune --all) — local host
+  // only, matching the prune banner. Confirmed since it removes tagged images.
+  async function pruneUnused() {
+    if (!confirm("Remove every local image not used by a container? This cannot be undone.")) return;
+    try {
+      setOperation({ title: "Pruning unused images", lines: ["Removing images no container references", "Podman is reclaiming layers"] });
+      const { body } = await api<{ reclaimedBytes?: number; removed?: number }>("/api/images/prune?all=true", { method: "POST", body: "{}" });
+      toast(`removed ${body.removed || 0} unused images; reclaimed ${fmtBytes(body.reclaimedBytes || 0)}`);
+      await refreshStaleImages();
+      await reloadResources();
+      await check(false);
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setOperation(null);
+    }
+  }
+
   async function updateAll() {
     if (!available.length || !confirm(`Pull and restart ${available.length} drifted units?`)) return;
     try {
@@ -2454,6 +2472,7 @@ function ImagesView({ view }: { view: ResourceView }) {
       <Panel title={`Images in store (${storeImages.length})`} icon={Package}>
         <div className="filterbar units-filterbar">
           <label className="searchbox"><Search size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter images by name, scope..." /></label>
+          <button className="btn" disabled={!!operation} onClick={pruneUnused}><Trash2 size={16} /> Prune unused</button>
         </div>
         {storeImages.length ? shownImages.length ? (
           <div className="unit-list">{shownImages.map((im, i) => <ResourceRow key={`${im.node || ""}/${im.scope}/${im.name}/${i}`} res={im} onChanged={reloadResources} updateAvailable={updates.some((u) => u.updateAvailable && u.image === im.name)} />)}</div>

@@ -64,6 +64,13 @@ func (f *fakeSecretsPodman) PruneImages(context.Context) (int64, error) {
 	f.stale, f.bytes = 0, 0
 	return reclaimed, nil
 }
+func (f *fakeSecretsPodman) PruneAllImages(context.Context) (int, int64, error) {
+	f.pruned = true
+	reclaimed := f.bytes
+	count := f.stale
+	f.stale, f.bytes = 0, 0
+	return count, reclaimed, nil
+}
 
 func newSecretsServer(t *testing.T, pod Podman) (*Server, string) {
 	t.Helper()

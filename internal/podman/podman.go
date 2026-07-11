@@ -502,6 +502,40 @@ func (c *Client) PruneImages(ctx context.Context) (int64, error) {
 	return reclaimed, nil
 }
 
+// PruneAllImages removes every image not used by a container (not just
+// dangling ones) — the "prune unused" action — returning how many were removed
+// and the bytes reclaimed.
+func (c *Client) PruneAllImages(ctx context.Context) (int, int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://d/v5.0.0/libpod/images/prune?all=true", nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	resp, err := c.pullHTTP.Do(req) // pruning many layers can be slow
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return 0, 0, fmt.Errorf("podman image prune: %s: %s", resp.Status, apiErrorBody(resp.Body))
+	}
+	var raw []struct {
+		Size int64  `json:"Size"`
+		Err  string `json:"Err"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return 0, 0, err
+	}
+	var count int
+	var reclaimed int64
+	for _, r := range raw {
+		if r.Err == "" {
+			count++
+			reclaimed += r.Size
+		}
+	}
+	return count, reclaimed, nil
+}
+
 // Secret is one podman secret as the secrets page lists it. Values are
 // write-only — the API deliberately never returns secret data.
 type Secret struct {
