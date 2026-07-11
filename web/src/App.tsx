@@ -1844,7 +1844,7 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
         </span>
       </div>
       {editable && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setLabelDraft(node.labels?.join(", ") || ""); setNameDraft(node.displayName || ""); setColorDraft(node.color || nodeColor(node.id)); setLabelsOpen(true); }}><SquarePen size={14} /> edit</button>}
-      {editable && !node.local && <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); removeNode(); }}><Trash2 size={14} /> remove</button>}
+      {editable && !node.local && !!node.address && <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); removeNode(); }}><Trash2 size={14} /> remove</button>}
       {labelsOpen && <Overlay title={`Edit ${node.local ? "local" : node.id}`} onClose={() => setLabelsOpen(false)}>
         <div className="stack-form">
           <label className="wizard-field"><span>Display name</span><input className="input" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} placeholder={node.local ? "local" : node.id} /></label>
@@ -2418,14 +2418,16 @@ function ImagesView({ view }: { view: ResourceView }) {
     }
   }
 
-  // Prune every image no container references (podman prune --all) — local host
-  // only, matching the prune banner. Confirmed since it removes tagged images.
+  // Prune every image no container references (podman prune --all) across all
+  // scopes: local stores natively, agent nodes via per-image delete. Confirmed
+  // since it removes tagged images.
   async function pruneUnused() {
-    if (!confirm("Remove every local image not used by a container? This cannot be undone.")) return;
+    if (!confirm("Remove every image not used by a container, on every node? This cannot be undone.")) return;
     try {
       setOperation({ title: "Pruning unused images", lines: ["Removing images no container references", "Podman is reclaiming layers"] });
-      const { body } = await api<{ reclaimedBytes?: number; removed?: number }>("/api/images/prune?all=true", { method: "POST", body: "{}" });
-      toast(`removed ${body.removed || 0} unused images; reclaimed ${fmtBytes(body.reclaimedBytes || 0)}`);
+      const { body } = await api<{ reclaimedBytes?: number; removed?: number; scopeErrors?: Record<string, string> }>("/api/images/prune?all=true", { method: "POST", body: "{}" });
+      const errs = Object.entries(body.scopeErrors || {});
+      toast(`removed ${body.removed || 0} unused images; reclaimed ${fmtBytes(body.reclaimedBytes || 0)}${errs.length ? ` — ${errs.length} scope(s) failed` : ""}`, errs.length > 0);
       await refreshStaleImages();
       await reloadResources();
       await check(false);
@@ -2458,7 +2460,7 @@ function ImagesView({ view }: { view: ResourceView }) {
   return (
     <Page title={view.label} subtitle="Image units, updates, and cleanup">
       {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
-      <p className="banner">Image prune and container import are local-host operations; remote hosts still support update checks and pulls where configured.</p>
+      <p className="banner">Stale-image prune and container import are local-host operations; "Prune unused" and update checks cover every node.</p>
       <div className="tiles">
         <MetricTile label="updates available" value={available.length} tone={available.length ? "warn" : "dim"} />
         <MetricTile label="current" value={current.length} tone={current.length ? "ok" : "dim"} />

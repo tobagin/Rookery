@@ -65,7 +65,9 @@ func (s *Server) nodeInventory(r *http.Request) []NodeInventory {
 		id := areaNodeID(area)
 		i, ok := index[id]
 		if !ok {
-			nodes = append(nodes, NodeInventory{ID: id, Address: area.Scope.SSH, Local: !area.Remote()})
+			// Agent-backed areas are not ssh-remote, but they are their own
+			// host — never the local node.
+			nodes = append(nodes, NodeInventory{ID: id, Address: area.Scope.SSH, Local: !area.Remote() && !area.ViaAgent()})
 			i = len(nodes) - 1
 			index[id] = i
 			switch {
