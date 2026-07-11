@@ -69,11 +69,13 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	for _, area := range s.areasSnapshot() {
 		switch {
 		case area.ViaAgent():
-			// Remote and rootless-local scopes are served by a rookery-agent,
-			// which computes managed itself (it has the podman store + units).
+			// Remote agent-backed scopes are served by a rookery-agent, which
+			// computes managed itself (it has the podman store + units).
 			out = s.appendAgentResources(r, area, out, scopeErrors)
-		case !area.Remote() && area.Scope.IsSystem():
-			// The local rootful scope is the one the single s.pod client backs.
+		case !area.Remote() && (area.Scope.IsSystem() || area.LocalRootless()):
+			// Local scopes: the rootful system store via the shared s.pod
+			// client, and each rootless user session via its own /run/user
+			// socket. localPod picks the right one.
 			out = s.appendLocalResources(r, area, out, scopeErrors)
 		}
 	}
@@ -81,8 +83,8 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appendLocalResources(r *http.Request, area Area, out []resourceJSON, scopeErrors map[string]string) []resourceJSON {
-	rp, ok := s.pod.(resourcesAPI)
-	if !ok || s.pod == nil {
+	rp := s.localPod(area)
+	if rp == nil {
 		return out
 	}
 	managed := s.managedResourceNames(r.Context(), area)
@@ -257,9 +259,9 @@ func (s *Server) handleInspectResource(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-	case !area.Remote() && area.Scope.IsSystem():
-		ins, ok := s.pod.(resourceInspector)
-		if !ok || s.pod == nil {
+	case !area.Remote() && (area.Scope.IsSystem() || area.LocalRootless()):
+		ins, ok := s.localBackend(*area).(resourceInspector)
+		if !ok {
 			httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
 			return
 		}
@@ -314,9 +316,9 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case area.ViaAgent():
 		err = area.Agent.DeleteResource(r.Context(), area.AgentScope, kind, name)
-	case !area.Remote() && area.Scope.IsSystem():
-		rm, ok := s.pod.(resourceMutator)
-		if !ok || s.pod == nil {
+	case !area.Remote() && (area.Scope.IsSystem() || area.LocalRootless()):
+		rm, ok := s.localBackend(*area).(resourceMutator)
+		if !ok {
 			httpError(w, http.StatusServiceUnavailable, "podman API socket not available")
 			return
 		}

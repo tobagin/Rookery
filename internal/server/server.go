@@ -77,11 +77,22 @@ type Area struct {
 	// remote (ssh) scope.
 	Agent      *agent.Client
 	AgentScope string
+	// UID is the numeric user id of a local rootless user area, so the control
+	// plane can reach that session's podman store at
+	// /run/user/<uid>/podman/podman.sock. Zero for the system scope and remote
+	// or agent-backed areas.
+	UID int
 }
 
 // Remote reports whether this area's files and systemd live on another
 // host, reached over ssh (Scope.SSH carries the target).
 func (a Area) Remote() bool { return a.Scope.IsRemote() }
+
+// LocalRootless reports whether this area is a rootless user session on this
+// host, served directly by the control plane (not over ssh or an agent).
+func (a Area) LocalRootless() bool {
+	return !a.Remote() && !a.ViaAgent() && !a.Scope.IsSystem()
+}
 
 // ViaAgent reports whether this area is reached through a rookery-agent.
 func (a Area) ViaAgent() bool { return a.Agent != nil }
@@ -149,6 +160,42 @@ type Server struct {
 	shareTTL      time.Duration
 	settings      []SettingGroup
 	mux           *http.ServeMux
+	userPodsMu    sync.Mutex
+	userPods      map[int]*podman.Client // lazy per-uid clients for local rootless scopes
+}
+
+// localBackend returns the podman client backing a local area, as the raw
+// object so callers can assert whichever slice they need (resourcesAPI,
+// resourceInspector, resourceMutator, imagesAPI): the shared system client for
+// the rootful scope, or a lazily-created per-uid client for a local rootless
+// user session (/run/user/<uid>/podman/podman.sock). Returns nil if the area
+// isn't a local podman-backed scope.
+func (s *Server) localBackend(area Area) any {
+	if area.LocalRootless() {
+		s.userPodsMu.Lock()
+		defer s.userPodsMu.Unlock()
+		if s.userPods == nil {
+			s.userPods = map[int]*podman.Client{}
+		}
+		c := s.userPods[area.UID]
+		if c == nil {
+			c = podman.New(podman.SocketPathForUID(area.UID))
+			s.userPods[area.UID] = c
+		}
+		return c
+	}
+	if !area.Remote() && area.Scope.IsSystem() && s.pod != nil {
+		return s.pod
+	}
+	return nil
+}
+
+// localPod returns the resources slice of a local area's podman client, or nil.
+func (s *Server) localPod(area Area) resourcesAPI {
+	if rp, ok := s.localBackend(area).(resourcesAPI); ok {
+		return rp
+	}
+	return nil
 }
 
 // New builds the Server and its routes.

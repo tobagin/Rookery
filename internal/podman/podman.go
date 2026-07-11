@@ -45,6 +45,13 @@ func SocketPath() string {
 	return fmt.Sprintf("/run/user/%d/podman/podman.sock", os.Getuid())
 }
 
+// SocketPathForUID returns a rootless user's conventional podman socket. The
+// control plane (running as root) uses this to reach a local rootless session's
+// podman store at /run/user/<uid>/podman/podman.sock.
+func SocketPathForUID(uid int) string {
+	return fmt.Sprintf("/run/user/%d/podman/podman.sock", uid)
+}
+
 // New returns a client for the socket at path.
 func New(path string) *Client {
 	transport := &http.Transport{

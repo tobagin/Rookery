@@ -248,10 +248,12 @@ func detectAreas(usersFlag string) ([]server.Area, error) {
 			if err != nil {
 				return nil, fmt.Errorf("-users: %w", err)
 			}
+			uid, _ := strconv.Atoi(u.Uid)
 			areas = append(areas, server.Area{
 				Label: u.Username,
 				Scope: systemd.Scope{User: u.Username},
 				Dirs:  quadlet.UserDirs(u.HomeDir),
+				UID:   uid,
 			})
 		}
 		return areas, nil
@@ -263,10 +265,12 @@ func detectAreas(usersFlag string) ([]server.Area, error) {
 	if usersFlag != "" && usersFlag != u.Username {
 		return nil, fmt.Errorf("-users requires running as root")
 	}
+	uid, _ := strconv.Atoi(u.Uid)
 	return []server.Area{{
 		Label: u.Username,
 		Scope: systemd.Scope{User: u.Username},
 		Dirs:  quadlet.UserDirs(u.HomeDir),
+		UID:   uid,
 	}}, nil
 }
 
