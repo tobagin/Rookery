@@ -351,6 +351,12 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
             {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
           </button>
         </div>
+        {nodes.length > 1 && (
+          <select className="input node-picker" value={nodeSel} onChange={(e) => setNodeSel(e.target.value)} title="Node to manage" aria-label="Node to manage">
+            <option value="">All nodes</option>
+            {nodes.map((n) => <option key={n.id} value={n.id}>{n.displayName || (n.local ? "local" : n.id)}</option>)}
+          </select>
+        )}
         <nav className="side-nav">{groupedNavItems(nav).map((group) => (
           <div className="nav-group" key={group.name}>
             <div className="nav-group-label">{group.name}</div>
@@ -365,12 +371,6 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
       <div className="workbench">
         <header className="topbar">
           <div className="host-chips">
-            {nodes.length > 1 && (
-              <select className="input node-picker" value={nodeSel} onChange={(e) => setNodeSel(e.target.value)} title="Node to manage" aria-label="Node to manage">
-                <option value="">All nodes</option>
-                {nodes.map((n) => <option key={n.id} value={n.id}>{n.displayName || (n.local ? "local" : n.id)}</option>)}
-              </select>
-            )}
             {host?.metrics?.hostname && <span className="chip" title={host.metrics.kernel}> {host.metrics.hostname}</span>}
             {host?.podman?.version && <span className="chip">podman {host.podman.version}</span>}
             {host?.selinuxEnforcing && <span className="chip">SELinux</span>}
