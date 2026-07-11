@@ -21,17 +21,19 @@ If you run containers "the right way", your UI is SSH and a text editor.
 Rookery is a thin, honest layer over systemd and Podman. It reads and writes
 the unit files that already define your system, validates them with the
 host's own Quadlet generator, and drives them through `systemctl`.
-**No daemon, no agents, and no hidden workload state.** Stop using Rookery
-tomorrow and you lose nothing about how your containers run — the Quadlet
-files on disk *are* the workload state. Rookery keeps only local admin
-metadata, such as accounts and UI-managed settings, in `rookery.db`.
+**Agentless by default, and no hidden workload state.** Remote hosts work
+over plain ssh; an optional lightweight `rookery-agent` is available where
+persistent connectivity beats ssh. Stop using Rookery tomorrow and you lose
+nothing about how your containers run — the Quadlet files on disk *are* the
+workload state. Rookery keeps only local admin metadata, such as accounts
+and UI-managed settings, in `rookery.db`.
 
 |  | Quadlet create/edit | Rootless multi-user | GPU | Multi-host | Server web UI |
 |---|:---:|:---:|:---:|:---:|:---:|
 | cockpit-podman | ✗ (run only) | partial | ✗ | ✗ | ✓ |
 | Portainer / Arcane | ✗ | ✗ | ✗ | ✓ (agents) | ✓ |
 | Podman Desktop | ✓ | n/a | partial | ✗ | ✗ (desktop app) |
-| **Rookery** | ✓ | ✓ | ✓ | ✓ (agentless) | ✓ |
+| **Rookery** | ✓ | ✓ | ✓ | ✓ (ssh or agent) | ✓ |
 
 ## Features
 
@@ -67,12 +69,31 @@ metadata, such as accounts and UI-managed settings, in `rookery.db`.
   host's generator), lifecycle, and logs over plain ssh. Use explicit grouped
   aliases such as `pi.root=pi-root,pi.user=pi-user` to show rootful and
   rootless scopes for one host under the same fleet node. Nothing to install
-  on the target beyond sshd and Podman.
+  on the target beyond sshd and Podman. SSH nodes can also be added and
+  removed at runtime from the Fleet page — no restart needed.
+- **Agent connector** — for hosts where persistent connectivity beats ssh,
+  `-agents pi=http://10.87.0.5:7666` (with a shared `-agent-token`) connects a
+  `rookery-agent` that serves *every* scope on its host — system plus each
+  rootless user — with full read/write parity: units, lifecycle, logs, live
+  stats, resources, host metrics, and GPUs. Quadlet files on the agent host
+  remain the source of truth.
+- **Live resources** — the Networks, Volumes, and Images pages list the real
+  podman objects in every scope's store (local rootful, local rootless, and
+  agent hosts), each flagged managed (a Quadlet unit owns it) or unmanaged,
+  and used or unused; click any for an inspect overlay with "used by", and
+  delete unmanaged leftovers from the browser.
+- **Node-scoped management** — a node picker in the top bar scopes the
+  dashboard, containers, pods, images, volumes, networks, sidebar counts, and
+  actions (prune, update all) to one node; "All nodes" shows the whole fleet,
+  and every Fleet row has a one-click "manage" shortcut. Nodes carry labels,
+  groups, custom display names, and colors.
 - **Image-update checks** — compare every unit's tag against the digest its
   registry serves (docker.io, ghcr.io, quay.io, …), flag drift, one-click
-  pull + restart — on remote hosts too (podman over ssh). Digest-pinned
-  images are correctly reported as unable to drift, and the dangling images
-  updates leave behind get a one-click prune with reclaimable size shown.
+  pull + restart per unit or "update all" — on remote hosts too (podman over
+  ssh). Digest-pinned images are correctly reported as unable to drift, the
+  dangling images updates leave behind get a one-click prune with reclaimable
+  size shown, and "prune unused" removes every unreferenced image on every
+  node (or just the selected one).
 - **Failure alerts** — `-alerts ntfy://ntfy.sh/topic` (or
   `telegram://BOT_TOKEN@CHAT_ID`, or any JSON webhook) notifies when a unit
   enters or recovers from `failed`, with exit code and restart count.
@@ -127,6 +148,8 @@ manage alice's rootless units).
 | `-audit-retention` | `ROOKERY_AUDIT_RETENTION` | `0` | prune audit events older than this on startup; `0` keeps everything |
 | `-git` | `ROOKERY_GIT=1` | auto-detect | track unit dirs in git: commit on save, history, rollback |
 | `-remotes` | `ROOKERY_REMOTES` | — | remote hosts over ssh, `alias=user@host,...`; `node.root=target,node.user=target` groups rootful/rootless targets under one fleet node |
+| `-agents` | `ROOKERY_AGENTS` | — | rookery-agents to manage, `alias=url,...` (e.g. `pi=http://10.87.0.5:7666`); one agent serves every scope on its host |
+| `-agent-token` | `ROOKERY_AGENT_TOKEN` | — | shared bearer token presented to rookery-agents |
 | `-alerts` | `ROOKERY_ALERTS` | — | failure alerts: `ntfy://host/topic`, `telegram://TOKEN@CHAT`, webhook URL |
 | `-alert-interval` | `ROOKERY_ALERT_INTERVAL` | `30s` | failure-alert polling interval |
 | `-alert-cooldown` | `ROOKERY_ALERT_COOLDOWN` | `0` | minimum time between repeated failure alerts for the same unit |
@@ -245,8 +268,9 @@ for the release process.
 
 - Rookery is intended to sit behind your own TLS/reverse-proxy layer when
   exposed beyond localhost.
-- Remote hosts are SSH-only and agentless; the target still needs sshd,
-  Podman, systemd, and compatible permissions.
+- Remote hosts connect over ssh (target needs sshd, Podman, systemd, and
+  compatible permissions) or through the optional `rookery-agent` (bearer
+  token over HTTP; put it on a private network such as a tailnet).
 - SELinux bind-mount hints and podman secret management are local-host only.
 - Containerized Rookery depends on host namespace and socket mounts for full
   lifecycle control; missing mounts degrade specific features rather than
@@ -299,31 +323,43 @@ Design rules (from the [PRD](docs/PRD.md)):
 | `GET /api/units/{scope}/{name}/history/{commit}` | content at a commit |
 | `POST /api/units/{scope}/{name}/rollback` | `{"commit": ...}` — validate + restore |
 | `GET /api/updates` | digest drift for every container unit's image |
+| `POST /api/updates/apply` | pull + restart a list of unit refs, or `{"allDrifted": true}` |
 | `POST /api/units/{scope}/{name}/update` | pull new image + restart |
-| `GET /api/gpus` | GPU inventory, local + every remote host |
+| `POST /api/units/bulk-action` | start/stop/restart a set of units with per-unit results |
+| `GET /api/stats` | one-shot per-container CPU/mem sample across scopes |
+| `GET /api/gpus` | GPU inventory: local, ssh remotes, and agent hosts |
 | `GET /api/host` | metrics, Podman info, scopes |
+| `GET /api/resources` | live podman networks/volumes/images in every scope, with managed/used flags |
+| `GET /api/resources/inspect` | display fields + "used by" for one resource |
+| `DELETE /api/resources` | remove a network/volume/image from a scope's store |
 | `GET /api/license` | edition, planned 3-node Enterprise Free allowance, managed-node count, remaining/over-limit nodes, unlimited user/SSO allowances |
-| `GET /api/nodes` | managed-node inventory grouped from local and remote scopes |
+| `GET /api/nodes` | managed-node inventory grouped from local, remote, and agent scopes |
+| `POST /api/nodes`, `DELETE /api/nodes/{id}` | add/remove ssh nodes at runtime (persisted in `rookery.db`) |
 | `GET /api/groups` | label-derived node groups for fleet organization |
 | `PATCH /api/nodes/{id}/labels` | save Rookery-owned node labels for fleet organization |
+| `PATCH /api/nodes/{id}/appearance` | per-node display name and color |
 | `GET /api/policies` | read-only fleet policy findings from Quadlet files |
 | `POST /api/policies/waivers`, `DELETE /api/policies/waivers/{key}` | waive or unwaive policy findings with Rookery metadata |
 | `GET/POST /api/secrets`, `DELETE /api/secrets/{name}` | podman secrets (write-only values) |
-| `GET /api/images/stale` / `POST /api/images/prune` | dangling-image count/size, prune |
+| `GET /api/images/stale` / `POST /api/images/prune` | dangling-image count/size, prune; `?all=true` prunes every unused image on every node, `&node=<id>` limits to one |
+| `GET/POST /api/tokens`, `DELETE /api/tokens/{name}` | API bearer tokens (value shown once) |
+| `POST /api/restore` | restore a `/api/backup` archive (validated, dry-run supported) |
+| `GET /metrics` | Prometheus text exposition: unit states, drift, node reachability |
 | `POST /api/share` | mint a 7-day read-only share token |
 | `GET/POST /api/setup` | first-run wizard: create the initial admin (one-shot) |
 | `GET/POST /api/users`, `DELETE /api/users/{name}`, `POST /api/users/{name}/password` | account management (admin) |
 | `GET /api/oidc/login` / `GET /api/oidc/callback` | OIDC authorization-code login |
 | `POST /api/login` / `POST /api/logout` / `GET /api/auth` | session auth (sliding idle timeout) |
 
-`{scope}` is `system`, a username, or a remote-host alias from `-remotes`
-(for grouped remotes, the full `node.scope` alias).
+`{scope}` is `system`, a username, a remote-host alias from `-remotes`
+(for grouped remotes, the full `node.scope` alias), or an agent scope label.
 
-**Remote-scope limits:** SELinux hints and podman secrets are local-host
-only. Everything else — list, edit, validate (remote generator), lifecycle,
+**Remote-scope limits:** SELinux hints, podman secrets, container import,
+and stale-image (dangling) prune are local-host only — the UI labels them as
+such. Everything else — list, edit, validate (remote generator), lifecycle,
 logs, git history/rollback (when the remote dir is already a repo; Rookery
-never git-inits another host), GPU panel, update checks and pulls — works
-identically over ssh.
+never git-inits another host), GPU panel, live resources, update checks and
+pulls, unused-image prune — works over ssh or through the agent.
 
 ## Development
 
@@ -340,10 +376,13 @@ is implemented and under active dogfooding.
 ## Roadmap
 
 Shipped through v1.x: full Quadlet lifecycle, importer, git history,
-GPU panel, agentless multi-host with remote git/updates/GPU parity,
-rootless auto-discovery, pod composition view, image-update checks with
-stale-image pruning, failure alerts (ntfy/Telegram/webhook), read-only
-share links, and podman-secrets management.
+GPU panel, agentless multi-host with remote git/updates/GPU parity, the
+optional rookery-agent connector (multi-scope, full parity), rootless
+auto-discovery, pod composition view, live resources with managed/used
+flags, node-scoped fleet management, image-update checks with stale and
+unused-image pruning, failure alerts (ntfy/Telegram/webhook), read-only
+share links, API tokens, Prometheus metrics, backup/restore, and
+podman-secrets management.
 
 Deliberately not built: `podlet` integration (the native converter covers
 the common cases and warns about the rest; a binary dependency for edge

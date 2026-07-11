@@ -67,8 +67,8 @@ Run this only against a disposable unit such as `rookery-smoke.container`.
 - If `-git` is enabled, confirm save/delete operations create commits.
 - View per-unit history, inspect a revision, and roll back the disposable unit.
 - Confirm manual git commands still work in the Quadlet directory.
-- Restart Rookery and confirm login sessions are invalidated while workloads
-  keep running.
+- Restart Rookery and confirm existing login sessions survive (they persist
+  in `rookery.db`) while workloads keep running.
 - Restore `ROOKERY_DATA_DIR` from backup on a test host and confirm accounts
   and settings return.
 
@@ -80,6 +80,13 @@ Run this only against a disposable unit such as `rookery-smoke.container`.
 - Confirm remote logs and lifecycle work against a disposable unit.
 - Confirm remote update checks and pulls work only when the remote user's
   Podman permissions allow them.
+- For agent-backed hosts (`ROOKERY_AGENTS=alias=url` + `ROOKERY_AGENT_TOKEN`):
+  confirm every scope on the host appears (system + rootless users), units
+  list with live state, lifecycle/logs/edit work, and the Fleet row shows the
+  host's metrics and GPUs.
+- Use the topbar node picker to select each node in turn and confirm the
+  dashboard, containers, images, volumes, and networks show only that node's
+  objects; confirm "Prune unused" with a node selected touches only that node.
 
 ## 7. Exit Criteria For Public Alpha
 

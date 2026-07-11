@@ -6,6 +6,16 @@ catches checksum *mismatches* — an entry omitted from the manifest's sha256
 map skips verification (`internal/server/backup.go`). Closing that fully
 needs archive signing; revisit if backups ever cross a trust boundary.
 
+**Shipped since (through 2026-07-11), beyond this list:** the rookery-agent
+connector (multi-scope, full read/write parity, host metrics + GPUs); typed
+resource pages (Containers/Pods/Networks/Volumes/Images, Updates folded into
+Images); live podman resources with managed/unmanaged and used/unused flags,
+inspect overlays, and unmanaged-object delete; node-scoped management (global
+node picker scoping every view and action, Fleet "manage" shortcut); prune of
+all unused images across nodes; runtime ssh node add/remove; per-node display
+names/colors; CodeMirror editor with Quadlet completion. Remaining agent
+gaps: heartbeat/last-seen, event streaming, agent-side dangling-image prune.
+
 Prioritized work list derived from a full code/PRD gap analysis (2026-07-09).
 Each item is self-contained: context, pointers, and done-criteria. Work top to
 bottom; items within a tier are independent unless noted.

@@ -1,7 +1,7 @@
 # PRD — Rookery
 
 **Rookery — a Quadlet-native web UI for Podman hosts.** (A rookery is where a pod of seals gathers.)
-Version 0.5 · 2026-07-07 · Author: tobagin · License: Apache-2.0
+Version 0.6 · 2026-07-11 · Author: tobagin · License: Apache-2.0
 
 ---
 
@@ -113,13 +113,20 @@ orchestration; Docker-only users who do not intend to move to Podman/Quadlet.
   editor insertion helpers with write-only values.
 
 ### Enterprise / Fleet governance
-- **Optional agents**: persistent node heartbeat, NAT-friendly connectivity,
-  event streaming, last-seen/offline state, easier enrollment, and richer
-  remote diagnostics while preserving Quadlet files as source of truth.
-- **Node groups and labels**: organize hosts by environment, team, hardware,
-  site, GPU class, or maintenance window.
-- **Bulk operations**: controlled start/stop/restart/update actions across
-  selected nodes and groups.
+- **Optional agents** *(shipped as `rookery-agent`)*: a per-host HTTP daemon
+  (shared bearer token) serving every scope on its host — system plus each
+  rootless user — with full read/write parity: units, lifecycle, logs, unit
+  files, live stats, resources, host metrics, and GPUs. Quadlet files remain
+  the source of truth. Heartbeat/last-seen and event streaming are still
+  open.
+- **Node groups and labels** *(shipped)*: organize hosts by environment,
+  team, hardware, site, GPU class, or maintenance window; per-node display
+  names and colors.
+- **Node-scoped management** *(shipped)*: a global node picker scopes every
+  view (dashboard, containers, pods, images, volumes, networks) and action
+  (prune, update all) to one node; Fleet is the cross-node view.
+- **Bulk operations** *(shipped for units and updates)*: controlled
+  start/stop/restart across selected units; update-all with per-unit results.
 - **Advanced RBAC**: permissions by node, group, scope, and action; team or
   group mapping from enterprise identity providers.
 - **Audit and compliance**: durable audit log for logins, lifecycle actions,
@@ -176,10 +183,12 @@ orchestration; Docker-only users who do not intend to move to Podman/Quadlet.
 - **Agentless multi-host**: SSH out from the primary node; every remote
   operation is a single `ssh` invocation wrapping a POSIX shell script.
   This remains the simplest and most transparent multi-host path.
-- **Optional agent**: an Enterprise-oriented daemon for hosts where persistent
-  connectivity, NAT traversal, event streaming, heartbeat, or simpler
-  onboarding beats SSH-only operation. The agent executes the same categories
-  of local systemd/Podman/filesystem operations and does not own workload
+- **Optional agent** *(shipped)*: `rookery-agent`, a per-host HTTP daemon
+  authenticated by a shared bearer token (`-agents alias=url` +
+  `-agent-token` on the control plane), for hosts where persistent
+  connectivity beats SSH-only operation. One agent serves all scopes on its
+  host (system + each rootless user); it executes the same categories of
+  local systemd/Podman/filesystem operations and does not own workload
   state.
 
 ## 8. Competitive landscape (June 2026)

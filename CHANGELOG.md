@@ -5,6 +5,44 @@ GitHub release notes may include the full commit list.
 
 ## Unreleased
 
+### Added
+
+- rookery-agent connector: `-agents alias=url` (with a shared `-agent-token`)
+  connects a per-host agent that serves every scope on its host — system plus
+  each rootless user — with full read/write parity: units, lifecycle, logs,
+  unit files, live stats, resources, host metrics, and GPUs.
+- Live resources: the Networks, Volumes, and Images pages list the real
+  podman objects in every scope's store (local rootful, local rootless served
+  natively, and agent hosts), flagged managed/unmanaged and used/unused, with
+  click-through inspect overlays including "used by", and delete for
+  unmanaged objects.
+- Node-scoped management: a node picker in the top bar scopes the dashboard,
+  containers, pods, images, volumes, networks, sidebar counts, and actions
+  (prune unused, update all) to one node; "All nodes" shows the whole fleet.
+  Fleet rows gained a one-click "manage" shortcut, and the Resources page
+  dropdown stays in sync with the global picker.
+- "Prune unused" images across every node — local scopes natively, agent
+  scopes via per-image delete — with per-scope error reporting, scopable to
+  one node (`POST /api/images/prune?all=true&node=<id>`).
+- Typed resource pages: Units split into Containers / Pods / Networks /
+  Volumes / Images; the Updates page folded into Images.
+- Fleet: add and remove ssh nodes at runtime from the UI (persisted in
+  `rookery.db`), per-node display names and colors, node detail dialogs, and
+  a context-aware "+ Add" that opens a guided create wizard with live Quadlet
+  preview.
+- Node metrics and GPU inventory for agent-backed nodes.
+- Update-drift rows carry their node so they follow the node picker.
+- CodeMirror editor with Quadlet key autocompletion, Ctrl+S save, and
+  unsaved-changes guards.
+
+### Fixed
+
+- Agent-backed nodes no longer report themselves as the local node, which
+  leaked the local host's GPUs onto them and mislabeled them in node pickers.
+- Local GPUs no longer leak onto remote nodes that report no metrics.
+- Startup panic when agent-backed areas hit git/backup/update paths.
+- Policy findings rendering.
+
 ## v0.1.0-alpha - 2026-07-08
 
 ### Added
