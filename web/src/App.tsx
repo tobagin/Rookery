@@ -297,22 +297,24 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
   // poll; lift to a shared context only if the double-fetch shows up as load.
   const { units: navUnits } = useUnits(true);
   const { resources: navResources } = useResources(true);
-  const [nodeCount, setNodeCount] = useState<number>();
+  const [nodes, setNodes] = useState<ManagedNode[]>([]);
   const [license, setLicense] = useState<LicenseStatus | null>(null);
   const [nodeColors, setNodeColors] = useState<Record<string, string>>({});
-  useEffect(() => { api<{ nodes?: ManagedNode[]; license?: LicenseStatus }>("/api/nodes").then(({ body }) => { setNodeCount(body.nodes?.length); setLicense(body.license || null); setNodeColors(Object.fromEntries((body.nodes || []).filter((n) => n.color).map((n) => [n.id, n.color!]))); }).catch(() => undefined); }, [api]);
+  const [nodeSel, setNodeSel] = useState(() => localStorage.getItem("rookery-node") || "");
+  useEffect(() => { localStorage.setItem("rookery-node", nodeSel); }, [nodeSel]);
+  useEffect(() => { api<{ nodes?: ManagedNode[]; license?: LicenseStatus }>("/api/nodes").then(({ body }) => { const ns = body.nodes || []; setNodes(ns); setLicense(body.license || null); setNodeColors(Object.fromEntries(ns.filter((n) => n.color).map((n) => [n.id, n.color!]))); setNodeSel((prev) => prev && !ns.some((n) => n.id === prev) ? "" : prev); }).catch(() => undefined); }, [api]);
   const atNodeLimit = !!license && !license.enterpriseAvailable && license.nodesRemaining <= 0;
   const navCounts = useMemo(() => {
     const c: Record<string, number> = {};
     RESOURCE_VIEWS.forEach((v) => { c[v.path] = 0; });
     // runnable types (containers/pods) come from Quadlet units; networks,
     // volumes and images come from live podman resources (which is why they
-    // were showing 0 when counted as units).
-    navUnits.forEach((u) => { const v = viewForKind(u.kind); if (v === "/containers" || v === "/pods") c[v] = (c[v] || 0) + 1; });
-    navResources.forEach((r) => { const v = viewForKind(r.kind); c[v] = (c[v] || 0) + 1; });
-    if (nodeCount !== undefined) c["/fleet"] = nodeCount;
+    // were showing 0 when counted as units). Counts follow the node picker.
+    navUnits.filter((u) => onNode(nodeSel, u.node)).forEach((u) => { const v = viewForKind(u.kind); if (v === "/containers" || v === "/pods") c[v] = (c[v] || 0) + 1; });
+    navResources.filter((r) => onNode(nodeSel, r.node)).forEach((r) => { const v = viewForKind(r.kind); c[v] = (c[v] || 0) + 1; });
+    c["/fleet"] = nodes.length;
     return c;
-  }, [navUnits, navResources, nodeCount]);
+  }, [navUnits, navResources, nodes.length, nodeSel]);
 
   useEffect(() => {
     localStorage.setItem("rookery-sidebar", sidebarCollapsed ? "collapsed" : "expanded");
@@ -340,6 +342,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
 
   return (
     <NodeColorContext.Provider value={nodeColors}>
+    <NodeSelContext.Provider value={{ sel: nodeSel, setSel: setNodeSel, nodes }}>
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-brand-row">
@@ -362,6 +365,12 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
       <div className="workbench">
         <header className="topbar">
           <div className="host-chips">
+            {nodes.length > 1 && (
+              <select className="input node-picker" value={nodeSel} onChange={(e) => setNodeSel(e.target.value)} title="Node to manage" aria-label="Node to manage">
+                <option value="">All nodes</option>
+                {nodes.map((n) => <option key={n.id} value={n.id}>{n.displayName || (n.local ? "local" : n.id)}</option>)}
+              </select>
+            )}
             {host?.metrics?.hostname && <span className="chip" title={host.metrics.kernel}> {host.metrics.hostname}</span>}
             {host?.podman?.version && <span className="chip">podman {host.podman.version}</span>}
             {host?.selinuxEnforcing && <span className="chip">SELinux</span>}
@@ -395,6 +404,7 @@ function Shell({ host, reloadAuth, theme, setTheme, children }: { host: HostInfo
         </Overlay>
       )}
     </div>
+    </NodeSelContext.Provider>
     </NodeColorContext.Provider>
   );
 }
@@ -815,21 +825,27 @@ function CodeEditor({ value, onChange, readOnly, small, short, onSave }: { value
 }
 
 function Dashboard({ host }: { host: HostInfo | null }) {
-  const { units, scopeErrors, error, loading, reload } = useUnits(true);
-  const [gpus, setGpus] = useState<GPUDevice[]>([]);
+  const { units: allUnits, scopeErrors, error, loading, reload } = useUnits(true);
+  const [allGpus, setAllGpus] = useState<GPUDevice[]>([]);
+  const { sel, nodes } = useNodeSel();
+  const selNode = nodes.find((n) => n.id === sel);
   const api = useApi();
 
   useEffect(() => {
-    api<{ devices?: GPUDevice[] }>("/api/gpus").then(({ body }) => setGpus(body.devices || [])).catch(() => setGpus([]));
+    api<{ devices?: GPUDevice[] }>("/api/gpus").then(({ body }) => setAllGpus(body.devices || [])).catch(() => setAllGpus([]));
   }, [api]);
 
+  const units = useMemo(() => allUnits.filter((u) => onNode(sel, u.node)), [allUnits, sel]);
+  const gpus = allGpus.filter((d) => gpuOnNode(d, selNode));
   const model = useMemo(() => summarizeUnits(units), [units]);
   const failed = units.filter((u) => stateClass(u) === "failed" || u.health === "unhealthy");
-  const m = host?.metrics || {};
+  // With a node selected, the metric tiles show that node's health (from the
+  // fleet inventory); "All nodes" keeps the local host's, as before.
+  const m = (selNode && !selNode.local ? selNode.metrics : host?.metrics) || {};
   const memPct = m.memTotalKb ? Math.round(100 * (1 - (m.memAvailKb || 0) / m.memTotalKb)) : null;
 
   return (
-    <Page title="Dashboard" kicker="Host overview">
+    <Page title="Dashboard" kicker={sel ? `Node ${selNode?.displayName || sel}` : "Fleet overview"}>
       <ScopeErrors errors={scopeErrors} />
       {error && <p className="banner banner-error">{error}</p>}
       {units.length > 0 && (
@@ -903,7 +919,8 @@ function UnitsPage({ view }: { view: ResourceView }) {
   const [compact, setCompact] = useState(() => localStorage.getItem("rookery-units-density") === "compact");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState("");
-  const ofType = useMemo(() => units.filter((u) => viewForKind(u.kind) === view.path), [units, view.path]);
+  const { sel } = useNodeSel();
+  const ofType = useMemo(() => units.filter((u) => viewForKind(u.kind) === view.path && onNode(sel, u.node)), [units, view.path, sel]);
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const rows = ofType.filter((u) => {
@@ -918,7 +935,7 @@ function UnitsPage({ view }: { view: ResourceView }) {
       return av.localeCompare(bv);
     });
   }, [ofType, q, scope, sort, status]);
-  const scopes = ["all", ...Array.from(new Set(units.map((u) => u.scope))).sort()];
+  const scopes = ["all", ...Array.from(new Set(ofType.map((u) => u.scope))).sort()];
   const selectedUnits = filtered.filter((u) => selected.has(`${u.scope}/${u.name}`));
   const statusCounts = useMemo(() => {
     const counts: Record<UnitState | "all", number> = { all: ofType.length, running: 0, failed: 0, pending: 0, stopped: 0, unknown: 0 };
@@ -1028,8 +1045,9 @@ function UnitsPage({ view }: { view: ResourceView }) {
 function ResourceList({ view }: { view: ResourceView }) {
   const { resources, scopeErrors, error, loading, reload } = useResources(true);
   const { auth } = useApiContext();
+  const { sel } = useNodeSel();
   const [q, setQ] = useState("");
-  const ofType = resources.filter((res) => res.kind === view.singular);
+  const ofType = resources.filter((res) => res.kind === view.singular && onNode(sel, res.node));
   const needle = q.trim().toLowerCase();
   const filtered = ofType.filter((res) => !needle || `${res.name} ${res.scope} ${res.driver || ""} ${res.detail || ""}`.toLowerCase().includes(needle)).sort((a, b) => a.name.localeCompare(b.name));
   const managed = ofType.filter((r) => r.managed).length;
@@ -1178,6 +1196,26 @@ const NodeColorContext = React.createContext<Record<string, string>>({});
 function useNodeColor() {
   const overrides = React.useContext(NodeColorContext);
   return useCallback((id: string) => overrides[id] || nodeColor(id), [overrides]);
+}
+
+// Global node selection ("" = all nodes), set from the topbar picker or a
+// Fleet row's manage button. Every list view and node-scoped action filters
+// by it; Shell provides it alongside the color map.
+const NodeSelContext = React.createContext<{ sel: string; setSel: (id: string) => void; nodes: ManagedNode[] }>({ sel: "", setSel: () => undefined, nodes: [] });
+function useNodeSel() {
+  return React.useContext(NodeSelContext);
+}
+// onNode: does a row tagged with rowNode belong to the selected node?
+// Untagged rows are local.
+function onNode(sel: string, rowNode?: string) {
+  return !sel || (rowNode || "local") === sel;
+}
+// gpuOnNode: local GPUs carry no host tag; remote/agent GPUs are tagged with
+// their node id (or hostname). No node = show everything.
+function gpuOnNode(d: GPUDevice, node?: ManagedNode) {
+  if (!node) return true;
+  const hn = node.metrics?.hostname;
+  return node.local ? (!d.host || d.host === "local" || d.host === hn) : (!!d.host && (d.host === node.id || d.host === hn));
 }
 
 // RowChip is a compact icon button with a hover/focus popover — used for
@@ -1797,6 +1835,8 @@ function FleetView() {
 function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: boolean; onChanged: () => void }) {
   const api = useApi();
   const { toast } = useApiContext();
+  const { setSel } = useNodeSel();
+  const navigate = useNavigate();
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState(node.labels?.join(", ") || "");
@@ -1843,6 +1883,7 @@ function NodeRow({ node, editable, onChanged }: { node: ManagedNode; editable?: 
           {rootless.units > 0 && <RowChip icon={UserRound} tone="priv-rootless" color={rootless.failed ? "var(--bad)" : undefined} label="rootless">rootless {rootless.running}/{rootless.units} running{rootless.failed ? `, ${rootless.failed} failed` : ""}</RowChip>}
         </span>
       </div>
+      <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setSel(node.id); navigate("/"); }}><Gauge size={14} /> manage</button>
       {editable && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setLabelDraft(node.labels?.join(", ") || ""); setNameDraft(node.displayName || ""); setColorDraft(node.color || nodeColor(node.id)); setLabelsOpen(true); }}><SquarePen size={14} /> edit</button>}
       {editable && !node.local && !!node.address && <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); removeNode(); }}><Trash2 size={14} /> remove</button>}
       {labelsOpen && <Overlay title={`Edit ${node.local ? "local" : node.id}`} onClose={() => setLabelsOpen(false)}>
@@ -2360,17 +2401,21 @@ function ImportResult({ unit, scope, sourceContainer = "" }: { unit: { name: str
 function ImagesView({ view }: { view: ResourceView }) {
   const api = useApi();
   const { toast } = useApiContext();
+  const { sel } = useNodeSel();
   const { resources, reload: reloadResources } = useResources(true);
-  const storeImages = resources.filter((r) => r.kind === "image").sort((a, b) => a.name.localeCompare(b.name));
+  const storeImages = resources.filter((r) => r.kind === "image" && onNode(sel, r.node)).sort((a, b) => a.name.localeCompare(b.name));
   const [params, setParams] = useSearchParams();
-  const [updates, setUpdates] = useState<UpdateInfo[]>([]);
+  const [allUpdates, setUpdates] = useState<UpdateInfo[]>([]);
   const [summary, setSummary] = useState("");
   const [stale, setStale] = useState<{ count: number; bytes: number } | null>(null);
   const [operation, setOperation] = useState<{ title: string; lines: string[] } | null>(null);
   const [q, setQ] = useState(params.get("q") || "");
+  const updates = allUpdates.filter((u) => onNode(sel, u.node));
   const available = updates.filter((u) => u.updateAvailable);
   const noted = updates.filter((u) => u.note && !u.updateAvailable);
   const current = updates.filter((u) => !u.note && !u.updateAvailable);
+  // Stale (dangling) prune only covers the local store.
+  const localSelected = onNode(sel, "local");
   const needle = q.trim().toLowerCase();
   const shownImages = storeImages.filter((im) => !needle || `${im.name} ${im.scope}`.toLowerCase().includes(needle));
   useEffect(() => {
@@ -2419,13 +2464,13 @@ function ImagesView({ view }: { view: ResourceView }) {
   }
 
   // Prune every image no container references (podman prune --all) across all
-  // scopes: local stores natively, agent nodes via per-image delete. Confirmed
-  // since it removes tagged images.
+  // scopes — or just the selected node's: local stores natively, agent nodes
+  // via per-image delete. Confirmed since it removes tagged images.
   async function pruneUnused() {
-    if (!confirm("Remove every image not used by a container, on every node? This cannot be undone.")) return;
+    if (!confirm(`Remove every image not used by a container, on ${sel ? `node ${sel}` : "every node"}? This cannot be undone.`)) return;
     try {
       setOperation({ title: "Pruning unused images", lines: ["Removing images no container references", "Podman is reclaiming layers"] });
-      const { body } = await api<{ reclaimedBytes?: number; removed?: number; scopeErrors?: Record<string, string> }>("/api/images/prune?all=true", { method: "POST", body: "{}" });
+      const { body } = await api<{ reclaimedBytes?: number; removed?: number; scopeErrors?: Record<string, string> }>(`/api/images/prune?all=true${sel ? `&node=${encodeURIComponent(sel)}` : ""}`, { method: "POST", body: "{}" });
       const errs = Object.entries(body.scopeErrors || {});
       toast(`removed ${body.removed || 0} unused images; reclaimed ${fmtBytes(body.reclaimedBytes || 0)}${errs.length ? ` — ${errs.length} scope(s) failed` : ""}`, errs.length > 0);
       await refreshStaleImages();
@@ -2439,10 +2484,13 @@ function ImagesView({ view }: { view: ResourceView }) {
   }
 
   async function updateAll() {
-    if (!available.length || !confirm(`Pull and restart ${available.length} drifted units?`)) return;
+    if (!available.length || !confirm(`Pull and restart ${available.length} drifted units${sel ? ` on node ${sel}` : ""}?`)) return;
     try {
       setOperation({ title: "Applying image updates", lines: [`Updating ${available.length} units`, "Pulling images and restarting services"] });
-      const { body } = await api<{ results?: Array<{ ok: boolean; scope: string; name: string; error?: string }> }>("/api/updates/apply", { method: "POST", body: JSON.stringify({ allDrifted: true }) });
+      // With a node selected, send the node's drifted units explicitly instead
+      // of allDrifted so other nodes are untouched.
+      const payload = sel ? { units: available.map((r) => ({ scope: r.scope, name: r.name })) } : { allDrifted: true };
+      const { body } = await api<{ results?: Array<{ ok: boolean; scope: string; name: string; error?: string }> }>("/api/updates/apply", { method: "POST", body: JSON.stringify(payload) });
       const results = body.results || [];
       const failed = results.filter((r) => !r.ok);
       toast(failed.length ? `updates: ${results.length - failed.length} ok — ${failureSummary(failed)}` : `updated ${results.length} units`, failed.length > 0);
@@ -2460,14 +2508,14 @@ function ImagesView({ view }: { view: ResourceView }) {
   return (
     <Page title={view.label} subtitle="Image units, updates, and cleanup">
       {operation && <OperationOverlay title={operation.title} lines={operation.lines} onClose={() => setOperation(null)} />}
-      <p className="banner">Stale-image prune and container import are local-host operations; "Prune unused" and update checks cover every node.</p>
+      {localSelected && <p className="banner">Stale-image prune and container import are local-host operations; "Prune unused" and update checks cover every node.</p>}
       <div className="tiles">
         <MetricTile label="updates available" value={available.length} tone={available.length ? "warn" : "dim"} />
         <MetricTile label="current" value={current.length} tone={current.length ? "ok" : "dim"} />
         <MetricTile label="skipped / errors" value={noted.length} tone={noted.length ? "warn" : "dim"} />
-        <MetricTile label="stale images" value={stale?.count || 0} tone={stale?.count ? "warn" : "dim"} />
+        {localSelected && <MetricTile label="stale images" value={stale?.count || 0} tone={stale?.count ? "warn" : "dim"} />}
       </div>
-      <div className="action-row"><button className="btn btn-accent" disabled={!!operation} onClick={() => check()}><RefreshCw size={16} /> Check image updates</button>{available.length > 0 && <button className="btn" disabled={!!operation} onClick={updateAll}><Download size={16} /> Update all</button>}{summary && <span className="muted">{summary}</span>}{stale?.count ? <button className="btn" disabled={!!operation} onClick={prune}><Trash2 size={16} /> Prune {stale.count} stale ({fmtBytes(stale.bytes)})</button> : null}</div>
+      <div className="action-row"><button className="btn btn-accent" disabled={!!operation} onClick={() => check()}><RefreshCw size={16} /> Check image updates</button>{available.length > 0 && <button className="btn" disabled={!!operation} onClick={updateAll}><Download size={16} /> Update all</button>}{summary && <span className="muted">{summary}</span>}{localSelected && stale?.count ? <button className="btn" disabled={!!operation} onClick={prune}><Trash2 size={16} /> Prune {stale.count} stale ({fmtBytes(stale.bytes)})</button> : null}</div>
       <Panel title="Available updates" icon={Download}>
         {available.length ? available.map((row) => <UpdateRow key={`${row.scope}/${row.name}`} row={row} after={() => check(false)} busy={!!operation} />) : <p className="muted">No image updates currently flagged.</p>}
       </Panel>
@@ -2515,30 +2563,21 @@ function UpdateRow({ row, after, busy }: { row: UpdateInfo; after: () => Promise
 // load/cores, host identity, and GPUs.
 function ResourcesView() {
   const api = useApi();
-  const [nodes, setNodes] = useState<ManagedNode[]>([]);
+  const { sel, setSel, nodes } = useNodeSel();
   const [devices, setDevices] = useState<GPUDevice[]>([]);
-  const [sel, setSel] = useState("");
-  const [error, setError] = useState("");
   useEffect(() => {
-    api<{ nodes?: ManagedNode[] }>("/api/nodes").then(({ body }) => {
-      const ns = body.nodes || [];
-      setNodes(ns);
-      setSel((prev) => prev || (ns.find((n) => n.local)?.id || ns[0]?.id || ""));
-    }).catch((e) => setError((e as Error).message));
     api<{ devices?: GPUDevice[] }>("/api/gpus").then(({ body }) => setDevices(body.devices || [])).catch(() => undefined);
   }, [api]);
-  const node = nodes.find((n) => n.id === sel);
+  // This page needs one concrete node; "All nodes" falls back to local. The
+  // page dropdown writes through to the global picker so both stay in sync.
+  const node = nodes.find((n) => n.id === sel) || nodes.find((n) => n.local) || nodes[0];
   const m = node?.metrics;
   const memPct = m?.memTotalKb ? Math.round(100 * (1 - (m.memAvailKb || 0) / m.memTotalKb)) : null;
-  // Non-local nodes only own GPUs explicitly tagged with their id/hostname;
-  // require d.host to be set so local GPUs (no host field) never leak onto a
-  // remote node that happens to lack metrics (undefined === undefined).
-  const nodeGpus = devices.filter((d) => node?.local ? (!d.host || d.host === "local" || d.host === m?.hostname) : (!!d.host && (d.host === node?.id || d.host === m?.hostname)));
+  const nodeGpus = devices.filter((d) => gpuOnNode(d, node));
   return (
     <Page title="Resources" subtitle="Host inventory and utilization">
-      {error && <p className="banner banner-error">{error}</p>}
       {nodes.length > 1 && (
-        <div className="filterbar resources-bar"><select className="input" value={sel} onChange={(e) => setSel(e.target.value)}>{nodes.map((n) => <option key={n.id} value={n.id}>{n.local ? "local" : n.id}{n.metrics?.hostname && n.metrics.hostname !== n.id ? ` · ${n.metrics.hostname}` : ""}</option>)}</select></div>
+        <div className="filterbar resources-bar"><select className="input" value={node?.id || ""} onChange={(e) => setSel(e.target.value)}>{nodes.map((n) => <option key={n.id} value={n.id}>{n.displayName || (n.local ? "local" : n.id)}{n.metrics?.hostname && n.metrics.hostname !== n.id ? ` · ${n.metrics.hostname}` : ""}</option>)}</select></div>
       )}
       <div className="tiles">
         {m?.cpuPct != null && m.cpuPct >= 0 && <MetricTile label="cpu" value={`${m.cpuPct}%`} tone="dim" meter={m.cpuPct} />}

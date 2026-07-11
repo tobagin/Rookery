@@ -146,6 +146,7 @@ export interface ValidationResult {
 }
 
 export interface UpdateInfo {
+  node?: string;
   scope: string;
   name: string;
   image?: string;

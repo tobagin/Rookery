@@ -17,6 +17,7 @@ import (
 
 // updateRow is one unit's drift-check result.
 type updateRow struct {
+	Node            string `json:"node,omitempty"`
 	Scope           string `json:"scope"`
 	Name            string `json:"name"`
 	Image           string `json:"image"`
@@ -95,7 +96,7 @@ func (s *Server) hostDigests(ctx context.Context, area Area, image string) ([]st
 }
 
 func (s *Server) checkDrift(ctx context.Context, area Area, name, image string) updateRow {
-	row := updateRow{Scope: area.Label, Name: name, Image: image}
+	row := updateRow{Node: areaNodeID(area), Scope: area.Label, Name: name, Image: image}
 	if strings.HasSuffix(image, ".image") || strings.HasSuffix(image, ".build") {
 		row.Note = "image comes from another unit; not checked"
 		return row

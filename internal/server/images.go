@@ -40,11 +40,16 @@ func (s *Server) handlePruneImages(w http.ResponseWriter, r *http.Request) {
 	// every scope: local stores natively, agent scopes by deleting each image
 	// the agent reports unused (the agent API has no prune endpoint); the
 	// default stays dangling-only so the stale-image button is unchanged.
+	// ?node=<id> limits the sweep to one node.
 	if r.URL.Query().Get("all") == "true" {
 		var count int
 		var reclaimed int64
+		node := r.URL.Query().Get("node")
 		scopeErrors := map[string]string{}
 		for _, area := range s.areasSnapshot() {
+			if node != "" && areaNodeID(area) != node {
+				continue
+			}
 			switch {
 			case area.ViaAgent():
 				res, err := area.Agent.Resources(r.Context(), area.AgentScope)

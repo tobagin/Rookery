@@ -163,6 +163,7 @@ h1, .kicker, h2, .tile-value, .tile-label, .unit-title, .nav-group-label, .chip,
   padding: 10px 22px; background: var(--topbar); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
 }
 .host-chips, .top-actions, .action-row, .filterbar, .editor-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.node-picker { max-width: 180px; min-height: 30px; padding: 3px 8px; font-size: 12px; }
 .chip, .badge {
   display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 2px 8px; border: 1px solid var(--border);
   border-radius: 999px; color: var(--text-2); background: rgba(154,174,196,.055); font-size: 11px; white-space: nowrap;
