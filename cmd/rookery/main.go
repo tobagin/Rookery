@@ -176,7 +176,7 @@ func main() {
 		log.Fatal(err)
 	}
 	areas = append(areas, remoteAreasList...)
-	agentAreasList, err := agentAreas(*agents, *agentToken)
+	agentAreasList, pendingAgents, err := agentAreas(*agents, *agentToken)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -214,6 +214,8 @@ func main() {
 		go srv.WatchFailuresWithCooldown(context.Background(), *alertInterval, *alertCooldown, sendAlert)
 		log.Printf("failure alerts enabled (%s, interval %s, cooldown %s)", *alerts, *alertInterval, *alertCooldown)
 	}
+
+	retryPendingAgents(srv, pendingAgents)
 
 	labels := make([]string, len(areas))
 	for i, a := range areas {
@@ -532,12 +534,22 @@ func remoteAreas(spec string) ([]server.Area, error) {
 	return areas, nil
 }
 
+// pendingAgent is an agent that was unreachable at startup; a background
+// retry loop keeps probing it and registers its areas once it answers.
+type pendingAgent struct {
+	alias, url string
+	cli        *agent.Client
+}
+
 // agentAreas builds an area per rookery-agent. It probes each agent's
-// /v1/info to learn whether it serves a user or the system scope — the
-// analogue of remoteAreas' ssh Probe, but over the agent's own HTTP API, so
-// there is no ssh account or key to arrange.
-func agentAreas(spec, token string) ([]server.Area, error) {
+// /v1/scopes to learn the scopes it serves — the analogue of remoteAreas'
+// ssh Probe, but over the agent's own HTTP API, so there is no ssh account
+// or key to arrange. Unreachable agents are returned as pending instead of
+// dropped: a slow or rebooting host must not disappear from the fleet until
+// the next control-plane restart.
+func agentAreas(spec, token string) ([]server.Area, []pendingAgent, error) {
 	var areas []server.Area
+	var pending []pendingAgent
 	for _, entry := range strings.Split(spec, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -545,38 +557,66 @@ func agentAreas(spec, token string) ([]server.Area, error) {
 		}
 		alias, url, ok := strings.Cut(entry, "=")
 		if !ok || alias == "" || url == "" {
-			return nil, fmt.Errorf("-agents: entry %q must be alias=url", entry)
+			return nil, nil, fmt.Errorf("-agents: entry %q must be alias=url", entry)
 		}
 		if token == "" {
-			return nil, fmt.Errorf("-agents: %s needs a token (set -agent-token or ROOKERY_AGENT_TOKEN)", alias)
+			return nil, nil, fmt.Errorf("-agents: %s needs a token (set -agent-token or ROOKERY_AGENT_TOKEN)", alias)
 		}
 		cli := agent.New(url, token)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		info, err := cli.Scopes(ctx)
 		cancel()
 		if err != nil {
-			log.Printf("WARNING: agent %s (%s) unreachable, skipping: %v", alias, url, err)
+			log.Printf("WARNING: agent %s (%s) unreachable, will keep retrying: %v", alias, url, err)
+			pending = append(pending, pendingAgent{alias: alias, url: url, cli: cli})
 			continue
 		}
-		// One agent serves every scope on its host; register an area per
-		// scope, all grouped under the host's node (NodeID = alias). The label
-		// is alias.<scopeID> (e.g. pi.system, pi.tobagin) so the API path
-		// segment stays unique and readable.
-		for _, sc := range info.Scopes {
-			area := server.Area{
-				Label:      alias + "." + sc.ID,
-				NodeID:     alias,
-				Agent:      cli,
-				AgentScope: sc.ID,
-			}
-			if !sc.System {
-				area.Scope = systemd.Scope{User: sc.User}
-			}
-			areas = append(areas, area)
-		}
+		areas = append(areas, areasForAgent(alias, cli, info)...)
 		log.Printf("agent %s: %s (%d scopes: %s)", alias, url, len(info.Scopes), scopeLabels(info.Scopes))
 	}
-	return areas, nil
+	return areas, pending, nil
+}
+
+// areasForAgent registers an area per scope the agent serves, all grouped
+// under the host's node (NodeID = alias). The label is alias.<scopeID>
+// (e.g. pi.system, pi.tobagin) so the API path segment stays unique and
+// readable.
+func areasForAgent(alias string, cli *agent.Client, info api.HostInfo) []server.Area {
+	var areas []server.Area
+	for _, sc := range info.Scopes {
+		area := server.Area{
+			Label:      alias + "." + sc.ID,
+			NodeID:     alias,
+			Agent:      cli,
+			AgentScope: sc.ID,
+		}
+		if !sc.System {
+			area.Scope = systemd.Scope{User: sc.User}
+		}
+		areas = append(areas, area)
+	}
+	return areas
+}
+
+// retryPendingAgents probes each startup-unreachable agent every 30s and
+// registers its areas on the running server once it answers.
+func retryPendingAgents(srv *server.Server, pending []pendingAgent) {
+	for _, p := range pending {
+		go func(p pendingAgent) {
+			for {
+				time.Sleep(30 * time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				info, err := p.cli.Scopes(ctx)
+				cancel()
+				if err != nil {
+					continue
+				}
+				srv.AddAreas(areasForAgent(p.alias, p.cli, info)...)
+				log.Printf("agent %s: %s now reachable (%d scopes: %s)", p.alias, p.url, len(info.Scopes), scopeLabels(info.Scopes))
+				return
+			}
+		}(p)
+	}
 }
 
 func scopeLabels(scopes []api.Scope) string {

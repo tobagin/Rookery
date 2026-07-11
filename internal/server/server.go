@@ -164,6 +164,22 @@ type Server struct {
 	userPods      map[int]*podman.Client // lazy per-uid clients for local rootless scopes
 }
 
+// AddAreas registers areas discovered after startup (e.g. an agent that was
+// unreachable when Rookery booted). Labels that already exist are skipped.
+func (s *Server) AddAreas(areas ...Area) {
+	s.areasMu.Lock()
+	defer s.areasMu.Unlock()
+	known := map[string]bool{}
+	for _, a := range s.areas {
+		known[a.Label] = true
+	}
+	for _, a := range areas {
+		if !known[a.Label] {
+			s.areas = append(s.areas, a)
+		}
+	}
+}
+
 // localBackend returns the podman client backing a local area, as the raw
 // object so callers can assert whichever slice they need (resourcesAPI,
 // resourceInspector, resourceMutator, imagesAPI): the shared system client for

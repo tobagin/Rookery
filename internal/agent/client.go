@@ -35,7 +35,9 @@ func New(baseURL, token string) *Client {
 	return &Client{
 		base:  strings.TrimRight(baseURL, "/"),
 		token: token,
-		http:  &http.Client{Timeout: 10 * time.Second},
+		// 15s: a loaded small host (CPU steal, cold socket activation) can
+		// take ~9s to answer /v1/scopes; 10s was routinely just too tight.
+		http:  &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
